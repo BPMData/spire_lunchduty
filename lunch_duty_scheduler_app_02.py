@@ -128,6 +128,28 @@ def check_schedule_conflicts(schedule_df, staff_df):
         if max_duties - min_duties > 2:
             issues.append(f"⚠️ Large workload imbalance: {min_duties}-{max_duties} duties per person")
     
+    # Check for days with multiple staff who have the pairing constraint tag
+    staff_with_tag = set(staff_df[staff_df['should_not_be_paired_with_others_with_this_tag'] == 1]['name'].tolist())
+    
+    if len(staff_with_tag) > 0:
+        days_with_multiple_tagged = []
+        for idx, row in schedule_df.iterrows():
+            staff_on_duty = [row['main_room_1'], row['main_room_2'], row['quiet_room']]
+            tagged_on_duty = [s for s in staff_on_duty if s in staff_with_tag]
+            
+            if len(tagged_on_duty) > 1:
+                days_with_multiple_tagged.append({
+                    'date': row['date'],
+                    'staff': tagged_on_duty
+                })
+        
+        if days_with_multiple_tagged:
+            issues.append(f"⚠️ {len(days_with_multiple_tagged)} day(s) have multiple staff with scheduling constraint tag:")
+            for day_info in days_with_multiple_tagged[:5]:  # Show first 5
+                issues.append(f"  - {day_info['date']}: {', '.join(day_info['staff'])}")
+            if len(days_with_multiple_tagged) > 5:
+                issues.append(f"  - ...and {len(days_with_multiple_tagged) - 5} more")
+    
     return issues
 
 
@@ -141,6 +163,9 @@ def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
     duty_count = {name: 0 for name in staff_names}
     quiet_room_count = {name: 0 for name in staff_names}
     last_duty_week = {name: -10 for name in staff_names}
+    
+    # Track which staff have the pairing constraint
+    staff_with_tag = set(staff_df[staff_df['should_not_be_paired_with_others_with_this_tag'] == 1]['name'].tolist())
 
     schedule = []
     total_slots = len(duty_days_df) * 3
@@ -181,7 +206,34 @@ def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
 
         # Sort and select
         available_staff.sort(key=lambda x: (duty_count[x], quiet_room_count[x]))
-        selected_staff = available_staff[:3] if len(available_staff) >= 3 else available_staff + ['UNASSIGNED'] * (3 - len(available_staff))
+        
+        # Try to avoid pairing multiple staff with the tag
+        selected_staff = []
+        tagged_count = 0
+        max_tagged_allowed = 1  # Only allow 1 staff member with the tag per day
+        
+        for staff in available_staff:
+            if len(selected_staff) >= 3:
+                break
+            
+            if staff in staff_with_tag:
+                if tagged_count < max_tagged_allowed:
+                    selected_staff.append(staff)
+                    tagged_count += 1
+            else:
+                selected_staff.append(staff)
+        
+        # If we couldn't fill slots while respecting tag constraint, relax it
+        if len(selected_staff) < 3:
+            for staff in available_staff:
+                if staff not in selected_staff:
+                    selected_staff.append(staff)
+                    if len(selected_staff) >= 3:
+                        break
+        
+        # Fill remaining slots with UNASSIGNED if needed
+        while len(selected_staff) < 3:
+            selected_staff.append('UNASSIGNED')
 
         random.shuffle(selected_staff)
         selected_staff.sort(key=lambda x: quiet_room_count.get(x, 0) if x != 'UNASSIGNED' else 999)
@@ -257,8 +309,16 @@ def create_pdf_schedule(schedule_df, period_calendar_df, month_name, year):
     merged_df['year'] = merged_df['date_parsed'].dt.year
 
     if month_name == "Full Year":
+        # Determine school year range
+        min_yr = merged_df['year'].min()
+        max_yr = merged_df['year'].max()
+        if min_yr == max_yr:
+            year_range = str(min_yr)
+        else:
+            year_range = f"{min_yr}-{max_yr}"
+        
         title = Paragraph("Spire School Lunch Duty Schedule", main_title_style)
-        subtitle = Paragraph("Full 2025-2026 Academic Year", month_title_style)
+        subtitle = Paragraph(f"Full {year_range} Academic Year", month_title_style)
         elements.append(title)
         elements.append(subtitle)
         elements.append(PageBreak())
@@ -623,6 +683,26 @@ def create_export_bundle(schedule_df, period_calendar_df, summary_df, month_name
     bundle_buffer.seek(0)
     return bundle_buffer
 
+@st.cache_data
+def load_calendar_data(uploaded_file):
+    """Loads and caches the calendar CSV to prevent re-reading on every rerun."""
+    # We must reset the file pointer, as streamlit passes it by reference
+    uploaded_file.seek(0)
+    calendar_df = pd.read_csv(uploaded_file)
+    try:
+        calendar_df['date_parsed'] = pd.to_datetime(calendar_df['date'], format='%A, %B %d, %Y')
+    except Exception as e:
+        st.error(f"❌ Error parsing dates in calendar. Expected format: 'Monday, August 25, 2025'\nError: {str(e)}")
+        return None, None
+    
+    calendar_df = calendar_df.dropna(subset=['date_parsed'])
+    calendar_df['year'] = calendar_df['date_parsed'].dt.year
+    calendar_df['month_name'] = calendar_df['date_parsed'].dt.strftime('%B')
+    available_months_temp = calendar_df[['year', 'month_name']].drop_duplicates().sort_values(['year', 'month_name'])
+    month_options = [f"{row['month_name']} {row['year']}" for _, row in available_months_temp.iterrows()]
+    
+    return month_options, calendar_df
+
 
 # ==================== SIDEBAR INPUT ====================
 st.sidebar.header("📋 Configuration")
@@ -632,52 +712,99 @@ calendar_file = st.sidebar.file_uploader("Upload Calendar CSV", type=['csv'],
 staff_file = st.sidebar.file_uploader("Upload Staff Availability CSV", type=['csv'],
                                        help="Staff names and Mon/Tue/Wed availability (1=available, 0=not)")
 
-use_seed = st.sidebar.checkbox("Use a random seed for generating lunch duty schedules. Leave this checked or enter your own number below for reproducible results. Uncheck for random results.", value=True)
+use_seed = st.sidebar.checkbox("Use random seed (for reproducible results)", value=True)
 if use_seed:
-    seed_value = st.sidebar.number_input("Random Seed", min_value=0, max_value=9999999999, value=42, step=1)
+    seed_value = st.sidebar.number_input("Random Seed", min_value=0, max_value=9999, value=42, step=1)
 else:
     seed_value = None
 
-filter_by_month = st.sidebar.checkbox("Generate for specific month only", value=False)
 if filter_by_month:
-    selected_month = st.sidebar.selectbox("Select Month", 
-                                          ['August 2025', 'September 2025', 'October 2025', 
-                                           'November 2025', 'December 2025', 'January 2026',
-                                           'February 2026', 'March 2026', 'April 2026',
-                                           'May 2026', 'June 2026'])
+    # This will be populated after calendar is uploaded
+    if calendar_file:
+        month_options, _ = load_calendar_data(calendar_file) # Will use cache
+        if month_options is not None:
+            selected_month = st.sidebar.selectbox("Select Month", month_options)
+        else:
+            st.sidebar.error("Error loading calendar. Check format.")
+            selected_month = None
+    else:
+        st.sidebar.info("Upload calendar to see available months")
+        selected_month = None
 else:
     selected_month = None
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**Created for Spire School 2025-2026**")
+if calendar_file:
+    # Show school year once calendar is loaded
+    try:
+        # Use the cached data!
+        _, temp_cal = load_calendar_data(calendar_file) 
+        if temp_cal is not None and not temp_cal.empty:
+            min_yr = temp_cal['date_parsed'].dt.year.min()
+            max_yr = temp_cal['date_parsed'].dt.year.max()
+            if min_yr == max_yr:
+                yr_display = str(min_yr)
+            else:
+                yr_display = f"{min_yr}-{max_yr}"
+            st.sidebar.markdown(f"**Schedule for {yr_display} Academic Year**")
+        else:
+            st.sidebar.markdown("**Spire School Scheduler**")
+    except Exception as e:
+        # Catch any potential errors during min/max
+        st.sidebar.markdown("**Spire School Scheduler**")
+else:
+    st.sidebar.markdown("**Spire School Scheduler**")
 
 # ==================== MAIN LOGIC ====================
 
 if calendar_file and staff_file:
     try:
-        # Load and validate data
-        calendar_df = pd.read_csv(calendar_file)
+        # === NEW VALIDATION BLOCK ===
+
+        # Use the cached function to load calendar data
+        _, calendar_df = load_calendar_data(calendar_file) 
+        
+        # Add a check in case loading failed
+        if calendar_df is None:
+            st.error("Failed to process calendar file. Please check the file and re-upload.")
+            st.stop()
+            
         staff_df = pd.read_csv(staff_file)
 
+        # Calendar validation
         required_calendar_cols = ['date', 'day_of_week', 'needs_duty']
         missing_calendar_cols = [col for col in required_calendar_cols if col not in calendar_df.columns]
         if missing_calendar_cols:
             st.error(f"❌ Calendar CSV missing required columns: {', '.join(missing_calendar_cols)}")
             st.stop()
 
-        if 'Unnamed: 0' in staff_df.columns:
-            staff_df = staff_df.rename(columns={'Unnamed: 0': 'name'})
-        
-        if staff_df.columns[0] not in ['name', 'Name']:
-             staff_df.columns = ['name'] + list(staff_df.columns[1:])
-        elif staff_df.columns[0] == 'Name':
+        # Robust staff 'name' column handling
+        if 'name' in staff_df.columns:
+            pass  # Column already correct
+        elif 'Name' in staff_df.columns:
             staff_df = staff_df.rename(columns={'Name': 'name'})
+        elif 'Unnamed: 0' in staff_df.columns:
+            staff_df = staff_df.rename(columns={'Unnamed: 0': 'name'})
+        else:
+            # If no 'name', 'Name', or 'Unnamed: 0' is found, stop and warn user
+            st.error("❌ Staff CSV must have a 'name' or 'Name' column (or be saved with an index). None was found.")
+            st.stop()
+        
+        # Add duplicate name check
+        if not staff_df['name'].is_unique:
+            st.error(f"❌ Staff CSV contains duplicate names. Please ensure every name is unique.")
+            st.stop()
 
+        # Staff validation (rest of your original logic is good)
         required_staff_cols = ['name', 'Monday', 'Tuesday', 'Wednesday']
         missing_staff_cols = [col for col in required_staff_cols if col not in staff_df.columns]
         if missing_staff_cols:
             st.error(f"❌ Staff CSV missing required columns: {', '.join(missing_staff_cols)}. Found: {', '.join(staff_df.columns)}")
             st.stop()
+
+        # Add optional column for scheduling constraints if not present
+        if 'should_not_be_paired_with_others_with_this_tag' not in staff_df.columns:
+            staff_df['should_not_be_paired_with_others_with_this_tag'] = 0
 
         # Validate staff availability values
         for day_col in ['Monday', 'Tuesday', 'Wednesday']:
@@ -685,12 +812,16 @@ if calendar_file and staff_file:
             if invalid_values.any():
                 st.error(f"❌ Staff availability for {day_col} must be 0 or 1 only. Check rows: {staff_df[invalid_values]['name'].tolist()}")
                 st.stop()
-
-        try:
-            calendar_df['date_parsed'] = pd.to_datetime(calendar_df['date'], format='%A, %B %d, %Y')
-        except Exception as e:
-            st.error(f"❌ Error parsing dates in calendar. Expected format: 'Monday, August 25, 2025'\nError: {str(e)}")
+        
+        # Validate scheduling constraint column
+        invalid_tag_values = ~staff_df['should_not_be_paired_with_others_with_this_tag'].isin([0, 1])
+        if invalid_tag_values.any():
+            st.error(f"❌ 'should_not_be_paired_with_others_with_this_tag' column must be 0 or 1 only. Check rows: {staff_df[invalid_tag_values]['name'].tolist()}")
             st.stop()
+
+        # The date parsing is now handled in load_calendar_data, so the try/except block for that is no longer needed here.
+
+        # === END OF NEW BLOCK ===
 
         all_days_for_period = calendar_df[
             (calendar_df['day_of_week'] == 'Monday') |
@@ -704,14 +835,28 @@ if calendar_file and staff_file:
             st.error("❌ No duty days found in calendar (needs_duty = 1)")
             st.stop()
         
+        # Get available months from the calendar data
+        duty_days_all['year'] = duty_days_all['date_parsed'].dt.year
+        duty_days_all['month'] = duty_days_all['date_parsed'].dt.month
+        duty_days_all['month_name'] = duty_days_all['date_parsed'].dt.strftime('%B')
+        
+        available_months_df = duty_days_all[['year', 'month', 'month_name']].drop_duplicates().sort_values(['year', 'month'])
+        available_months = [f"{row['month_name']} {row['year']}" for _, row in available_months_df.iterrows()]
+        
+        # Determine school year range for display
+        min_year = duty_days_all['year'].min()
+        max_year = duty_days_all['year'].max()
+        if min_year == max_year:
+            school_year_display = str(min_year)
+        else:
+            school_year_display = f"{min_year}-{max_year}"
+        
         if selected_month:
-            month_mapping = {
-                'August 2025': (2025, 8), 'September 2025': (2025, 9), 'October 2025': (2025, 10),
-                'November 2025': (2025, 11), 'December 2025': (2025, 12), 'January 2026': (2026, 1),
-                'February 2026': (2026, 2), 'March 2026': (2026, 3), 'April 2026': (2026, 4),
-                'May 2026': (2026, 5), 'June 2026': (2026, 6)
-            }
-            year, month = month_mapping[selected_month]
+            # Parse the selected month to get year and month
+            selected_parts = selected_month.split()
+            month_name_selected = selected_parts[0]
+            year = int(selected_parts[1])
+            month = pd.to_datetime(f"{month_name_selected} 1, {year}").month
             
             duty_days_to_schedule = duty_days_all[
                 (duty_days_all['date_parsed'].dt.year == year) & 
@@ -733,8 +878,8 @@ if calendar_file and staff_file:
         else:
             duty_days_to_schedule = duty_days_all
             period_calendar_df = all_days_for_period
-            current_period_name = "Full 2025-2026 Year"
-            current_year_val = 2025
+            current_period_name = f"Full {school_year_display} Academic Year"
+            current_year_val = min_year
             current_month_name = "Full Year"
 
         col1, col2, col3 = st.columns(3)
@@ -745,6 +890,12 @@ if calendar_file and staff_file:
         with col3:
             avg_duties = (len(duty_days_to_schedule) * 3) / len(staff_df) if len(staff_df) > 0 else 0
             st.metric("📊 Avg Duties/Person", f"{avg_duties:.1f}")
+        
+        # Show info about scheduling constraints if any staff have the tag
+        staff_with_tag_count = (staff_df['should_not_be_paired_with_others_with_this_tag'] == 1).sum()
+        if staff_with_tag_count > 0:
+            st.info(f"ℹ️ **Scheduling Constraint Active:** {staff_with_tag_count} staff member(s) marked with 'should_not_be_paired_with_others_with_this_tag'. The scheduler will attempt to avoid scheduling multiple tagged staff on the same day.")
+
 
         def generate_schedule():
             with st.spinner("Generating optimized schedule..."):
@@ -921,6 +1072,10 @@ else:
         - `Monday` - Binary (1 = available, 0 = not available)
         - `Tuesday` - Binary (1 = available, 0 = not available)
         - `Wednesday` - Binary (1 = available, 0 = not available)
+        - **Optional:** `should_not_be_paired_with_others_with_this_tag` - Binary (1 = avoid pairing, 0 = normal)
+        
+        **Optional Scheduling Constraint:**
+        If you include the `should_not_be_paired_with_others_with_this_tag` column, staff marked with `1` will preferably not be scheduled together on the same day. This is useful for distributing staff who may need reminders about their duties. The scheduler will attempt to have at most 1 such staff member per day, while still maintaining fair duty distribution.
 
         ### Algorithm Constraints:
         - ✅ Exactly 3 staff per duty day (2 main room, 1 quiet room)
@@ -928,6 +1083,7 @@ else:
         - ✅ Equal distribution (everyone gets within ±1 duties)
         - ✅ Respects individual availability constraints
         - ✅ Fair quiet room rotation
+        - ✅ Optional: Avoids pairing multiple staff with scheduling constraint tag
 
         ### Export Formats:
         - **CSV**: Raw data for *assigned duty days only*.
@@ -936,6 +1092,6 @@ else:
         - **Batch**: All formats in one zip file.
 
         ### Tips:
-        - Use a random seed for reproducible results
+        - Set a non-random seed for reproducible results
         - **Important:** After changing the month, you *must* click "Generate Schedule" again before downloading.
         """)
