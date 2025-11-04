@@ -204,83 +204,93 @@ def create_pdf_schedule(schedule_df, month_name, year):
     return buffer
 
 
-def create_png_schedule(schedule_df, month_name, year):
-    """Create a PNG image of the schedule"""
+def create_def create_png_schedule(schedule_df, month_name, year):
+    """
+    Create a single-table PNG image of the schedule for the month,
+    without extra "Week" rows, and with pink for quiet lunch.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+    from io import BytesIO
+
+    # Prepare data
     schedule_df_copy = schedule_df.copy()
-    schedule_df_copy['week'] = schedule_df_copy['date_parsed'].dt.isocalendar().week
-    weeks = sorted(schedule_df_copy['week'].unique())
+    schedule_df_copy['date_parsed'] = pd.to_datetime(schedule_df_copy['date_parsed'])
+    # Sort by date (just in case)
+    schedule_df_copy = schedule_df_copy.sort_values('date_parsed').reset_index(drop=True)
 
-    fig_height = 3 + len(weeks) * 2
-    fig = plt.figure(figsize=(14, fig_height))
-    fig.suptitle(f"{month_name} {year} - Lunch Duty Schedule", fontsize=20, fontweight='bold', color='#8B0000')
-
-    ax = fig.add_subplot(111)
-    ax.axis('off')
-
-    y_pos = 0.95
-
-    for week_idx, week_num in enumerate(weeks):
-        week_data = schedule_df_copy[schedule_df_copy['week'] == week_num]
-
-        ax.text(0.5, y_pos, f"Week {week_idx + 1}", fontsize=14, fontweight='bold', 
-                ha='center', transform=ax.transAxes)
-        y_pos -= 0.05
-
-        col_width = 1 / 3
-        cell_height = 0.12 / 3
-
-        for i, day in enumerate(['Monday', 'Tuesday', 'Wednesday']):
-            x = i * col_width
-            day_data = week_data[week_data['day_of_week'] == day]
-            if len(day_data) > 0:
-                date_str = day_data.iloc[0]['date'].split(',')[1].strip()
-                day_text = f"{day} {date_str}"
+    # Build table data structures (group by week, then flatten)
+    table_rows = []
+    row_labels = []
+    datelist = []
+    for idx, row in schedule_df_copy.iterrows():
+        # Monday, Tuesday, Wednesday version
+        if row['day_of_week'] == "Monday":
+            monday_row = [f"{row['main_room_1']}", f"{row['main_room_2']}", f"{row['quiet_room']}"]
+            monday_label = f"Monday {row['date_parsed'].strftime('%B %d')}"
+            monday_rooms = ["main", "main", "quiet"]
+            # Check next two rows (They may not exist if it's the end of the data)
+            tuesday, wednesday = None, None
+            if idx+1 < len(schedule_df_copy) and schedule_df_copy.iloc[idx+1]['day_of_week'] == "Tuesday":
+                tuesday_row = [f"{schedule_df_copy.iloc[idx+1]['main_room_1']}", 
+                               f"{schedule_df_copy.iloc[idx+1]['main_room_2']}", 
+                               f"{schedule_df_copy.iloc[idx+1]['quiet_room']}"]
+                tuesday_label = f"Tuesday {schedule_df_copy.iloc[idx+1]['date_parsed'].strftime('%B %d')}"
             else:
-                day_text = f"{day} (No Lunch)"
+                tuesday_row = ["NO LUNCH"]*3
+                tuesday_label = f"Tuesday"
 
-            rect = Rectangle((x, y_pos - cell_height), col_width, cell_height, 
-                            linewidth=1, edgecolor='black', facecolor='#8B0000', 
-                            transform=ax.transAxes)
-            ax.add_patch(rect)
-            ax.text(x + col_width/2, y_pos - cell_height/2, day_text, 
-                   fontsize=10, fontweight='bold', color='white', ha='center', va='center',
-                   transform=ax.transAxes)
+            if idx+2 < len(schedule_df_copy) and schedule_df_copy.iloc[idx+2]['day_of_week'] == "Wednesday":
+                wednesday_row = [f"{schedule_df_copy.iloc[idx+2]['main_room_1']}", 
+                                 f"{schedule_df_copy.iloc[idx+2]['main_room_2']}", 
+                                 f"{schedule_df_copy.iloc[idx+2]['quiet_room']}"]
+                wednesday_label = f"Wednesday {schedule_df_copy.iloc[idx+2]['date_parsed'].strftime('%B %d')}"
+            else:
+                wednesday_row = ["NO LUNCH"]*3
+                wednesday_label = f"Wednesday"
+            # Stack columns so that each row is all assignments for one staff slot across the week
+            for slot in range(3):
+                table_rows.append([monday_row[slot], tuesday_row[slot], wednesday_row[slot]])
+            row_labels = ["Main Room 1", "Main Room 2", "Quiet Room"]
+            datelist.append([monday_label, tuesday_label, wednesday_label])
 
-        y_pos -= cell_height + 0.01
+    # PLOT
+    fig, ax = plt.subplots(figsize=(9, 4 + 0.7*len(table_rows)))
+    plt.title(f"{month_name} {year} - Lunch Duty Schedule", fontsize=18, color='#8B0000', weight='bold')
+    ax.axis("off")
 
-        for row_idx in range(3):
-            for col_idx, day in enumerate(['Monday', 'Tuesday', 'Wednesday']):
-                day_data = week_data[week_data['day_of_week'] == day]
-                if len(day_data) > 0:
-                    if row_idx == 2:
-                        staff = day_data.iloc[0]['quiet_room']
-                        bg_color = '#FFB6D9'
-                    else:
-                        staff = day_data.iloc[0]['main_room_1'] if row_idx == 0 else day_data.iloc[0]['main_room_2']
-                        bg_color = 'white'
-                else:
-                    staff = 'NO LUNCH'
-                    bg_color = '#E0E0E0'
+    # Table and formatting
+    col_labels = datelist[0] if datelist else ["Monday", "Tuesday", "Wednesday"]
+    ncols = 3
+    nrows = 3
 
-                x = col_idx * col_width
-                rect = Rectangle((x, y_pos - cell_height), col_width, cell_height, 
-                                linewidth=1, edgecolor='black', facecolor=bg_color,
-                                transform=ax.transAxes)
-                ax.add_patch(rect)
-                ax.text(x + col_width/2, y_pos - cell_height/2, staff if staff != 'UNASSIGNED' else '', 
-                       fontsize=9, ha='center', va='center', transform=ax.transAxes)
+    # Draw day headers
+    header_colors = ['#8B0000']*ncols
+    for j, col in enumerate(col_labels):
+        ax.add_patch(Rectangle((j, nrows), 1, 0.7, facecolor=header_colors[j], edgecolor='black', lw=1))
+        ax.text(j+0.5, nrows+0.35, col, ha='center', va='center', color='white', fontsize=12, weight='bold')
+    
+    # Draw table cells
+    for i, label in enumerate(row_labels):
+        for j in range(ncols):
+            value = table_rows[i][j]
+            bg = '#FFB6D9' if i == 2 and value != "NO LUNCH" else 'white'
+            ax.add_patch(Rectangle((j, nrows-1-i), 1, 0.7, facecolor=bg, edgecolor='black', lw=1))
+            ax.text(j+0.5, nrows-1-i+0.35, value, ha='center', va='center', color='black', fontsize=11)
+        # Add side label for slots (optional)
+        ax.text(-0.25, nrows-1-i+0.35, row_labels[i], ha='right', va='center', fontsize=11, color='gray')
 
-            y_pos -= cell_height + 0.01
+    plt.ylim(-0.5, nrows+1)
+    plt.xlim(-0.8, ncols)
 
-        y_pos -= 0.04
-
+    # Tighten and save
     plt.tight_layout()
-
-    buffer = BytesIO()
-    plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
-    buffer.seek(0)
+    buf = BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=False)
+    buf.seek(0)
     plt.close()
-    return buffer
+    return buf
+
 
 
 # ==================== SIDEBAR INPUT ====================
