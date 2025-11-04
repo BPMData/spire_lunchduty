@@ -718,6 +718,8 @@ if use_seed:
 else:
     seed_value = None
 
+# THIS IS THE LINE YOU WERE MISSING
+filter_by_month = st.sidebar.checkbox("Generate for specific month only", value=False) 
 if filter_by_month:
     # This will be populated after calendar is uploaded
     if calendar_file:
@@ -799,7 +801,7 @@ if calendar_file and staff_file:
         required_staff_cols = ['name', 'Monday', 'Tuesday', 'Wednesday']
         missing_staff_cols = [col for col in required_staff_cols if col not in staff_df.columns]
         if missing_staff_cols:
-            st.error(f"❌ Staff CSV missing required columns: {', '.join(missing_staff_cols)}. Found: {', '.join(staff_df.columns)}")
+            st.error(f"❌ Staff CSV missing required columns: {', '.join(missing_Sstaff_cols)}. Found: {', '.join(staff_df.columns)}")
             st.stop()
 
         # Add optional column for scheduling constraints if not present
@@ -1092,6 +1094,6 @@ else:
         - **Batch**: All formats in one zip file.
 
         ### Tips:
-        - Set a non-random seed for reproducible results
+        - Use a random seed for reproducible results
         - **Important:** After changing the month, you *must* click "Generate Schedule" again before downloading.
         """)
