@@ -50,7 +50,6 @@ def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
     schedule = []
     total_slots = len(duty_days_df) * 3
     
-    # Avoid division by zero if no staff
     if len(staff_names) == 0:
         st.error("❌ Staff list is empty. Cannot generate schedule.")
         return pd.DataFrame(), pd.DataFrame()
@@ -107,7 +106,7 @@ def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
         schedule.append({
             'date': date,
             'date_parsed': date_parsed,
-            'day_of_week_duty': day_of_week, # Use different column names to avoid merge conflicts
+            'day_of_week': day_of_week, # <-- FIX 1: Renamed from 'day_of_week_duty'
             'main_room_1': main_room_staff[0] if len(main_room_staff) > 0 else 'UNASSIGNED',
             'main_room_2': main_room_staff[1] if len(main_room_staff) > 1 else 'UNASSIGNED',
             'quiet_room': quiet_room_staff
@@ -133,7 +132,6 @@ def create_pdf_schedule(schedule_df, period_calendar_df, month_name, year):
     Uses period_calendar_df for all days, and schedule_df for duty assignments.
     """
     buffer = BytesIO()
-    # FIX 1: Reduced margins
     doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), topMargin=0.3*inch, bottomMargin=0.3*inch)
     elements = []
     styles = getSampleStyleSheet()
@@ -164,16 +162,12 @@ def create_pdf_schedule(schedule_df, period_calendar_df, month_name, year):
     )
     
     # Merge all days with duty days
-    # period_calendar_df has columns: date, day_of_week, needs_duty, date_parsed
-    # schedule_df has columns: date_parsed, main_room_1, main_room_2, quiet_room, ...
-    
-    # Ensure 'date_parsed' is datetime in both
     period_calendar_df['date_parsed'] = pd.to_datetime(period_calendar_df['date_parsed'])
     schedule_df['date_parsed'] = pd.to_datetime(schedule_df['date_parsed'])
 
     merged_df = period_calendar_df.merge(
-        schedule_df.drop(columns=['date'], errors='ignore'), # Drop 'date' from schedule_df if it exists to avoid conflict
-        on='date_parsed', 
+        schedule_df.drop(columns=['date'], errors='ignore'),
+        on=['date_parsed', 'day_of_week'], # <-- FIX 2: Join on both keys
         how='left'
     )
 
@@ -219,26 +213,23 @@ def create_pdf_schedule(schedule_df, period_calendar_df, month_name, year):
                         else:
                             days_in_week[day_name] = None
                     
-                    # FIX 2: Always show date, even if N/A (though N/A shouldn't happen now)
                     mon_date = days_in_week['Monday']['date_parsed'].strftime('%b %d') if days_in_week['Monday'] is not None else 'N/A'
                     tue_date = days_in_week['Tuesday']['date_parsed'].strftime('%b %d') if days_in_week['Tuesday'] is not None else 'N/A'
                     wed_date = days_in_week['Wednesday']['date_parsed'].strftime('%b %d') if days_in_week['Wednesday'] is not None else 'N/A'
 
                     table_data[0] = [f"Monday {mon_date}", f"Tuesday {tue_date}", f"Wednesday {wed_date}"]
                     
-                    cell_styles = [] # To hold background colors
+                    cell_styles = [] 
                     
                     for i in range(3): # For rows: Main 1, Main 2, Quiet
                         row_list = []
                         for c_idx, day in enumerate(['Monday', 'Tuesday', 'Wednesday']):
                             day_data = days_in_week[day]
                             
-                            # Check if it's a "NO LUNCH" day
                             if day_data is None or pd.isna(day_data.get('main_room_1')):
                                 row_list.append('NO LUNCH')
                                 cell_styles.append(('BACKGROUND', (c_idx, i+1), (c_idx, i+1), colors.HexColor('#E0E0E0')))
                             else:
-                                # It is a duty day
                                 if i == 2:
                                     staff = day_data['quiet_room']
                                     cell_styles.append(('BACKGROUND', (c_idx, i+1), (c_idx, i+1), colors.HexColor('#FFB6D9')))
@@ -260,14 +251,14 @@ def create_pdf_schedule(schedule_df, period_calendar_df, month_name, year):
                         ('FONTSIZE', (0, 1), (-1, -1), 10),
                         ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
                         ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                        ('HEIGHT', (0, 0), (-1, -1), 0.5*inch), # FIX 1: Reduced row height
+                        ('HEIGHT', (0, 0), (-1, -1), 0.5*inch),
                     ]
                     
-                    table_style_base.extend(cell_styles) # Add conditional cell colors
+                    table_style_base.extend(cell_styles) 
                     table.setStyle(TableStyle(table_style_base))
 
                     elements.append(table)
-                    elements.append(Spacer(1, 0.2*inch)) # FIX 1: Reduced spacer
+                    elements.append(Spacer(1, 0.2*inch)) 
 
             legend_items = [
                 Paragraph("■ Pink = Quiet Lunch Room", legend_style),
@@ -304,9 +295,9 @@ def create_pdf_schedule(schedule_df, period_calendar_df, month_name, year):
                 
                 table_data[0] = [f"Monday {mon_date}", f"Tuesday {tue_date}", f"Wednesday {wed_date}"]
                 
-                cell_styles = [] # To hold background colors
+                cell_styles = [] 
 
-                for i in range(3): # For rows: Main 1, Main 2, Quiet
+                for i in range(3): 
                     row_list = []
                     for c_idx, day in enumerate(['Monday', 'Tuesday', 'Wednesday']):
                         day_data = days_in_week[day]
@@ -336,14 +327,14 @@ def create_pdf_schedule(schedule_df, period_calendar_df, month_name, year):
                     ('FONTSIZE', (0, 1), (-1, -1), 10),
                     ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
                     ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                    ('HEIGHT', (0, 0), (-1, -1), 0.5*inch), # FIX 1
+                    ('HEIGHT', (0, 0), (-1, -1), 0.5*inch), 
                 ]
                 
                 table_style_base.extend(cell_styles)
                 table.setStyle(TableStyle(table_style_base))
 
                 elements.append(table)
-                elements.append(Spacer(1, 0.2*inch)) # FIX 1
+                elements.append(Spacer(1, 0.2*inch)) 
 
         legend_items = [
             Paragraph("■ Pink = Quiet Lunch Room", legend_style),
@@ -360,7 +351,7 @@ def create_pdf_schedule(schedule_df, period_calendar_df, month_name, year):
 def create_single_png_schedule(schedule_df, period_calendar_df, month_name, year):
     """
     Create a clean PNG image for a SINGLE month's schedule using Pillow.
-    FIX: Now uses period_calendar_df to show ALL days, not just duty days.
+    Uses period_calendar_df to show ALL days, not just duty days.
     """
     # Merge all days with duty days
     period_calendar_df['date_parsed'] = pd.to_datetime(period_calendar_df['date_parsed'])
@@ -368,7 +359,7 @@ def create_single_png_schedule(schedule_df, period_calendar_df, month_name, year
 
     merged_df = period_calendar_df.merge(
         schedule_df.drop(columns=['date'], errors='ignore'), 
-        on=['date_parsed', 'day_of_week'], # Merge on both
+        on=['date_parsed', 'day_of_week'], # This join is now correct
         how='left',
         suffixes=('', '_duty')
     )
@@ -420,8 +411,8 @@ def create_single_png_schedule(schedule_df, period_calendar_df, month_name, year
     
     maroon = '#8B0000'
     pink = '#FFB6D9'
-    light_gray = '#F5F5F5' # Light gray for alternating rows (duty)
-    no_lunch_gray = '#E0E0E0' # Gray for "NO LUNCH" days
+    light_gray = '#F5F5F5' 
+    no_lunch_gray = '#E0E0E0' 
     border = '#CCCCCC'
     
     title = f"{month_name} {year} - Lunch Duty Schedule"
@@ -457,31 +448,28 @@ def create_single_png_schedule(schedule_df, period_calendar_df, month_name, year
 
             if not row_data_series.empty:
                 row_data = row_data_series.iloc[0]
-                # FIX 2: Always show date
                 day_date = row_data['date_parsed'].strftime('%b %d')
                 main_1 = row_data['main_room_1']
                 main_2 = row_data['main_room_2']
                 quiet = row_data['quiet_room']
                 is_no_lunch = (main_1 == 'NO LUNCH')
             else:
-                # This day is not in the month (e.g., month starts on Tue)
                 day_date = ''
                 main_1 = main_2 = quiet = ' '
-                is_no_lunch = True # Treat as empty
+                is_no_lunch = True 
             
             day_text = f"{day_names[day_idx]}\n{day_date}"
 
-            # Determine background color
             if is_no_lunch and day_date == '':
-                row_bg = 'white' # Blank day, just white
+                row_bg = 'white' 
                 cafeteria_text = ' '
                 quiet_text = ' '
             elif is_no_lunch:
-                row_bg = no_lunch_gray # FIX 2: "NO LUNCH" day
+                row_bg = no_lunch_gray 
                 cafeteria_text = 'NO LUNCH'
                 quiet_text = 'NO LUNCH'
             else:
-                row_bg = light_gray if day_idx % 2 == 0 else 'white' # Standard duty day
+                row_bg = light_gray if day_idx % 2 == 0 else 'white' 
                 cafeteria_text = f"{main_1}\n{main_2}"
                 quiet_text = quiet
 
@@ -532,13 +520,12 @@ def create_png_zip_schedule(schedule_df, period_calendar_df):
     """
     zip_buffer = BytesIO()
     
-    # We need to merge here too, to pass the right data to create_single_png_schedule
     period_calendar_df['date_parsed'] = pd.to_datetime(period_calendar_df['date_parsed'])
     schedule_df['date_parsed'] = pd.to_datetime(schedule_df['date_parsed'])
     
     merged_df = period_calendar_df.merge(
         schedule_df.drop(columns=['date'], errors='ignore'), 
-        on='date_parsed', 
+        on=['date_parsed', 'day_of_week'], # <-- FIX 3: Join on both keys
         how='left',
         suffixes=('', '_duty')
     )
@@ -553,12 +540,10 @@ def create_png_zip_schedule(schedule_df, period_calendar_df):
             current_year = row['year']
             current_month = row['month']
             
-            # Get all days for this month
             month_calendar_df = period_calendar_df[
                 (period_calendar_df['date_parsed'].dt.year == current_year) & 
                 (period_calendar_df['date_parsed'].dt.month == current_month)
             ]
-            # Get only duty days for this month
             month_schedule_df = schedule_df[
                 (schedule_df['date_parsed'].dt.year == current_year) & 
                 (schedule_df['date_parsed'].dt.month == current_month)
@@ -569,7 +554,6 @@ def create_png_zip_schedule(schedule_df, period_calendar_df):
 
             month_name_str = month_calendar_df['date_parsed'].iloc[0].strftime('%B')
             
-            # Generate the PNG for this single month
             png_buffer = create_single_png_schedule(
                 month_schedule_df, 
                 month_calendar_df, 
@@ -645,21 +629,18 @@ if calendar_file and staff_file:
             st.error(f"❌ Error parsing dates in calendar. Expected format: 'Monday, August 25, 2025'\nError: {str(e)}")
             st.stop()
 
-        # Get ALL Mon/Tue/Wed for potential scheduling
         all_days_for_period = calendar_df[
             (calendar_df['day_of_week'] == 'Monday') |
             (calendar_df['day_of_week'] == 'Tuesday') |
             (calendar_df['day_of_week'] == 'Wednesday')
         ].copy()
 
-        # Get only days that NEED duty
         duty_days_all = calendar_df[calendar_df['needs_duty'] == 1].copy()
         
         if len(duty_days_all) == 0:
             st.error("❌ No duty days found in calendar (needs_duty = 1)")
             st.stop()
         
-        # Apply filter *if* selected, otherwise use all days
         if selected_month:
             month_mapping = {
                 'August 2025': (2025, 8), 'September 2025': (2025, 9), 'October 2025': (2025, 10),
@@ -669,13 +650,11 @@ if calendar_file and staff_file:
             }
             year, month = month_mapping[selected_month]
             
-            # Filter duty days
             duty_days_to_schedule = duty_days_all[
                 (duty_days_all['date_parsed'].dt.year == year) & 
                 (duty_days_all['date_parsed'].dt.month == month)
             ].copy()
 
-            # Filter ALL days for the period
             period_calendar_df = all_days_for_period[
                 (all_days_for_period['date_parsed'].dt.year == year) & 
                 (all_days_for_period['date_parsed'].dt.month == month)
@@ -683,7 +662,6 @@ if calendar_file and staff_file:
 
             if len(duty_days_to_schedule) == 0:
                 st.warning(f"⚠️ No duty days found for {selected_month}")
-                # We don't st.stop() here, because we still want to show a blank schedule
             
             current_period_name = selected_month
             current_year_val = year
@@ -691,13 +669,12 @@ if calendar_file and staff_file:
 
         else:
             duty_days_to_schedule = duty_days_all
-            period_calendar_df = all_days_for_period # Use all Mon/Tue/Wed
+            period_calendar_df = all_days_for_period 
             current_period_name = "Full 2025-2026 Year"
             current_year_val = 2025 
             current_month_name = "Full Year"
 
 
-        # Display metrics based on the *selected* period
         col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("📅 Total Duty Days to Schedule", len(duty_days_to_schedule))
@@ -707,7 +684,6 @@ if calendar_file and staff_file:
             avg_duties = (len(duty_days_to_schedule) * 3) / len(staff_df) if len(staff_df) > 0 else 0
             st.metric("📊 Avg Duties/Person", f"{avg_duties:.1f}")
 
-        # Generate button with callback to save to session state
         def generate_schedule():
             with st.spinner("Generating optimized schedule..."):
                 try:
@@ -716,10 +692,7 @@ if calendar_file and staff_file:
                     st.session_state.schedule_df = schedule_df
                     st.session_state.summary_df = summary_df
                     st.session_state.schedule_ready = True
-                    
-                    # FIX: Save the complete calendar for this period
                     st.session_state.period_calendar_df = period_calendar_df 
-                    
                     st.session_state.period_name = current_period_name 
                     st.session_state.month_name = current_month_name
                     st.session_state.year_val = current_year_val
@@ -730,18 +703,16 @@ if calendar_file and staff_file:
 
         st.button("🎲 Generate Schedule", type="primary", on_click=generate_schedule)
 
-        # ==================== DISPLAY RESULTS (persisted in session state) ====================
         if st.session_state.schedule_ready:
             
             st.success(f"✅ Schedule for {st.session_state.period_name} ready! ({len(st.session_state.schedule_df)} duty days assigned)")
 
-            # Display schedule table
             st.subheader("📋 Duty Schedule (Assigned Days Only)")
             display_schedule = st.session_state.schedule_df.drop(columns=['date_parsed'], errors='ignore')
+            # Columns are: 'date', 'day_of_week', 'main_room_1', 'main_room_2', 'quiet_room'
             display_schedule.columns = ['Date', 'Day', 'Main Room 1', 'Main Room 2', 'Quiet Room']
             st.dataframe(display_schedule, use_container_width=True, height=400)
 
-            # Display summary statistics
             st.subheader("📊 Duty Distribution Summary")
             col1, col2 = st.columns(2)
 
@@ -766,7 +737,6 @@ if calendar_file and staff_file:
                 else:
                     st.warning("No summary data to display.")
 
-            # ==================== EXPORT OPTIONS ====================
             st.subheader("💾 Download Results")
 
             gen_date_str = datetime.now().strftime('%m.%d.%y')
@@ -782,7 +752,6 @@ if calendar_file and staff_file:
 
             with col1:
                 if export_format == "CSV (Data)":
-                    # The CSV export remains just the assigned duty days
                     display_schedule_csv = st.session_state.schedule_df.drop(columns=['date_parsed'], errors='ignore')
                     display_schedule_csv.columns = ['Date', 'Day', 'Main Room 1', 'Main Room 2', 'Quiet Room']
                     schedule_csv_data = display_schedule_csv.to_csv(index=False)
@@ -796,7 +765,7 @@ if calendar_file and staff_file:
                 elif export_format == "PDF (Print-friendly)":
                     pdf_buffer = create_pdf_schedule(
                         st.session_state.schedule_df, 
-                        st.session_state.period_calendar_df, # Pass in all days
+                        st.session_state.period_calendar_df, 
                         st.session_state.month_name, 
                         st.session_state.year_val
                     )
@@ -811,7 +780,7 @@ if calendar_file and staff_file:
                     if st.session_state.month_name == "Full Year":
                         zip_buffer = create_png_zip_schedule(
                             st.session_state.schedule_df,
-                            st.session_state.period_calendar_df # Pass in all days
+                            st.session_state.period_calendar_df 
                         )
                         st.download_button(
                             label="📥 Download All Monthly PNGs (.zip)",
@@ -822,7 +791,7 @@ if calendar_file and staff_file:
                     else:
                         png_buffer = create_single_png_schedule(
                             st.session_state.schedule_df,
-                            st.session_state.period_calendar_df, # Pass in all days
+                            st.session_state.period_calendar_df, 
                             st.session_state.month_name,
                             st.session_state.year_val
                         )
