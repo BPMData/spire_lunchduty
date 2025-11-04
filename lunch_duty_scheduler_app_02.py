@@ -207,6 +207,7 @@ def create_pdf_schedule(schedule_df, month_name, year):
 
 
 def create_png_schedule(schedule_df, month_name, year):
+    # Attempt 02, hopefully fixes the text wrapping cutoff error.
     """
     Create a clean PNG image of the weekly lunch duty schedule using Pillow.
     Groups by week (Mon/Tue/Wed) with pink highlighting for quiet room.
@@ -229,18 +230,19 @@ def create_png_schedule(schedule_df, month_name, year):
             current_week = []
     
     # Image dimensions
-    cell_width = 200
-    cell_height = 50
+    cell_width = 250
+    cell_height = 60
     header_height = 60
     title_height = 80
     padding = 20
+    week_spacing = 30
     
-    cols = 4  # Day label + 3 staff slots
+    cols = 3  # Day label + Cafeteria + Quiet Room
     rows_per_week = 4  # Header + Mon + Tue + Wed
-    total_rows = sum(rows_per_week for _ in weeks)
+    total_weeks = len(weeks)
     
     img_width = cols * cell_width + 2 * padding
-    img_height = title_height + total_rows * cell_height + 2 * padding
+    img_height = title_height + (total_weeks * (rows_per_week * cell_height + week_spacing)) + 2 * padding
     
     # Create image
     img = Image.new('RGB', (img_width, img_height), 'white')
@@ -277,7 +279,7 @@ def create_png_schedule(schedule_df, month_name, year):
         draw.rectangle([padding, y, img_width - padding, y + header_height], fill=maroon, outline=border, width=2)
         
         # Column headers
-        headers = ['Day', 'Main Room 1', 'Main Room 2', 'Quiet Room']
+        headers = ['Day', 'Cafeteria', 'Quiet Room']
         for col_idx, header in enumerate(headers):
             x = padding + col_idx * cell_width
             header_bbox = draw.textbbox((0, 0), header, font=header_font)
@@ -313,41 +315,36 @@ def create_png_schedule(schedule_df, month_name, year):
             day_text = f"{day_names[day_idx]}\n{day_date}"
             draw.text((padding + 10, y + 10), day_text, fill='black', font=cell_font)
             
-            # Draw main room 1
+            # Draw cafeteria (combined main rooms)
+            cafeteria_text = f"{main_1}\n{main_2}" if main_1 != 'NO LUNCH' else 'NO LUNCH'
             draw.rectangle([padding + cell_width, y, padding + 2*cell_width, y + cell_height],
                           fill=row_bg, outline=border, width=1)
-            text_bbox = draw.textbbox((0, 0), main_1, font=cell_font)
-            text_width = text_bbox[2] - text_bbox[0]
-            text_height = text_bbox[3] - text_bbox[1]
-            draw.text((padding + cell_width + (cell_width - text_width) // 2, 
-                      y + (cell_height - text_height) // 2), 
-                     main_1, fill='black', font=cell_font)
-            
-            # Draw main room 2
-            draw.rectangle([padding + 2*cell_width, y, padding + 3*cell_width, y + cell_height],
-                          fill=row_bg, outline=border, width=1)
-            text_bbox = draw.textbbox((0, 0), main_2, font=cell_font)
-            text_width = text_bbox[2] - text_bbox[0]
-            text_height = text_bbox[3] - text_bbox[1]
-            draw.text((padding + 2*cell_width + (cell_width - text_width) // 2,
-                      y + (cell_height - text_height) // 2),
-                     main_2, fill='black', font=cell_font)
+            # Center the text block
+            lines = cafeteria_text.split('\n')
+            line_height = 18
+            start_y = y + (cell_height - len(lines) * line_height) // 2
+            for i, line in enumerate(lines):
+                text_bbox = draw.textbbox((0, 0), line, font=cell_font)
+                text_width = text_bbox[2] - text_bbox[0]
+                draw.text((padding + cell_width + (cell_width - text_width) // 2, 
+                          start_y + i * line_height), 
+                         line, fill='black', font=cell_font)
             
             # Draw quiet room (pink background)
             quiet_bg = pink if quiet != 'NO LUNCH' else row_bg
-            draw.rectangle([padding + 3*cell_width, y, padding + 4*cell_width, y + cell_height],
+            draw.rectangle([padding + 2*cell_width, y, padding + 3*cell_width, y + cell_height],
                           fill=quiet_bg, outline=border, width=1)
             text_bbox = draw.textbbox((0, 0), quiet, font=cell_font)
             text_width = text_bbox[2] - text_bbox[0]
             text_height = text_bbox[3] - text_bbox[1]
-            draw.text((padding + 3*cell_width + (cell_width - text_width) // 2,
+            draw.text((padding + 2*cell_width + (cell_width - text_width) // 2,
                       y + (cell_height - text_height) // 2),
                      quiet, fill='black', font=cell_font)
             
             y += cell_height
         
         # Add spacing between weeks
-        y += 20
+        y += week_spacing
     
     # Save to buffer
     buf = BytesIO()
