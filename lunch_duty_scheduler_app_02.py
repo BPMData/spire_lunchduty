@@ -592,7 +592,7 @@ calendar_file = st.sidebar.file_uploader("Upload Calendar CSV", type=['csv'],
 staff_file = st.sidebar.file_uploader("Upload Staff Availability CSV", type=['csv'],
                                        help="Staff names and Mon/Tue/Wed availability (1=available, 0=not)")
 
-use_seed = st.sidebar.checkbox("Use random seed (for reproducible results)", value=True)
+use_seed = st.sidebar.checkbox("Use a random seed for generating lunch duty schedules. Leave this blank or enter your own number for reproducible results.", value=True)
 if use_seed:
     seed_value = st.sidebar.number_input("Random Seed", min_value=0, max_value=9999, value=42, step=1)
 else:
