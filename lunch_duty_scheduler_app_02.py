@@ -204,7 +204,7 @@ def create_pdf_schedule(schedule_df, month_name, year):
     return buffer
 
 
-def create_def create_png_schedule(schedule_df, month_name, year):
+def create_png_schedule(schedule_df, month_name, year):
     """
     Create a single-table PNG image of the schedule for the month,
     without extra "Week" rows, and with pink for quiet lunch.
