@@ -12,6 +12,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
+from PIL import Image, ImageDraw, ImageFont
+
 
 st.set_page_config(page_title="Lunch Duty Scheduler", page_icon="🍽️", layout="wide")
 
@@ -206,89 +208,152 @@ def create_pdf_schedule(schedule_df, month_name, year):
 
 def create_png_schedule(schedule_df, month_name, year):
     """
-    Create a single-table PNG image of the schedule for the month,
-    without extra "Week" rows, and with pink for quiet lunch.
+    Create a clean PNG image of the weekly lunch duty schedule using Pillow.
+    Groups by week (Mon/Tue/Wed) with pink highlighting for quiet room.
     """
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Rectangle
-    from io import BytesIO
-
     # Prepare data
     schedule_df_copy = schedule_df.copy()
     schedule_df_copy['date_parsed'] = pd.to_datetime(schedule_df_copy['date_parsed'])
-    # Sort by date (just in case)
     schedule_df_copy = schedule_df_copy.sort_values('date_parsed').reset_index(drop=True)
-
-    # Build table data structures (group by week, then flatten)
-    table_rows = []
-    row_labels = []
-    datelist = []
-    for idx, row in schedule_df_copy.iterrows():
-        # Monday, Tuesday, Wednesday version
-        if row['day_of_week'] == "Monday":
-            monday_row = [f"{row['main_room_1']}", f"{row['main_room_2']}", f"{row['quiet_room']}"]
-            monday_label = f"Monday {row['date_parsed'].strftime('%B %d')}"
-            monday_rooms = ["main", "main", "quiet"]
-            # Check next two rows (They may not exist if it's the end of the data)
-            tuesday, wednesday = None, None
-            if idx+1 < len(schedule_df_copy) and schedule_df_copy.iloc[idx+1]['day_of_week'] == "Tuesday":
-                tuesday_row = [f"{schedule_df_copy.iloc[idx+1]['main_room_1']}", 
-                               f"{schedule_df_copy.iloc[idx+1]['main_room_2']}", 
-                               f"{schedule_df_copy.iloc[idx+1]['quiet_room']}"]
-                tuesday_label = f"Tuesday {schedule_df_copy.iloc[idx+1]['date_parsed'].strftime('%B %d')}"
-            else:
-                tuesday_row = ["NO LUNCH"]*3
-                tuesday_label = f"Tuesday"
-
-            if idx+2 < len(schedule_df_copy) and schedule_df_copy.iloc[idx+2]['day_of_week'] == "Wednesday":
-                wednesday_row = [f"{schedule_df_copy.iloc[idx+2]['main_room_1']}", 
-                                 f"{schedule_df_copy.iloc[idx+2]['main_room_2']}", 
-                                 f"{schedule_df_copy.iloc[idx+2]['quiet_room']}"]
-                wednesday_label = f"Wednesday {schedule_df_copy.iloc[idx+2]['date_parsed'].strftime('%B %d')}"
-            else:
-                wednesday_row = ["NO LUNCH"]*3
-                wednesday_label = f"Wednesday"
-            # Stack columns so that each row is all assignments for one staff slot across the week
-            for slot in range(3):
-                table_rows.append([monday_row[slot], tuesday_row[slot], wednesday_row[slot]])
-            row_labels = ["Main Room 1", "Main Room 2", "Quiet Room"]
-            datelist.append([monday_label, tuesday_label, wednesday_label])
-
-    # PLOT
-    fig, ax = plt.subplots(figsize=(9, 4 + 0.7*len(table_rows)))
-    plt.title(f"{month_name} {year} - Lunch Duty Schedule", fontsize=18, color='#8B0000', weight='bold')
-    ax.axis("off")
-
-    # Table and formatting
-    col_labels = datelist[0] if datelist else ["Monday", "Tuesday", "Wednesday"]
-    ncols = 3
-    nrows = 3
-
-    # Draw day headers
-    header_colors = ['#8B0000']*ncols
-    for j, col in enumerate(col_labels):
-        ax.add_patch(Rectangle((j, nrows), 1, 0.7, facecolor=header_colors[j], edgecolor='black', lw=1))
-        ax.text(j+0.5, nrows+0.35, col, ha='center', va='center', color='white', fontsize=12, weight='bold')
     
-    # Draw table cells
-    for i, label in enumerate(row_labels):
-        for j in range(ncols):
-            value = table_rows[i][j]
-            bg = '#FFB6D9' if i == 2 and value != "NO LUNCH" else 'white'
-            ax.add_patch(Rectangle((j, nrows-1-i), 1, 0.7, facecolor=bg, edgecolor='black', lw=1))
-            ax.text(j+0.5, nrows-1-i+0.35, value, ha='center', va='center', color='black', fontsize=11)
-        # Add side label for slots (optional)
-        ax.text(-0.25, nrows-1-i+0.35, row_labels[i], ha='right', va='center', fontsize=11, color='gray')
-
-    plt.ylim(-0.5, nrows+1)
-    plt.xlim(-0.8, ncols)
-
-    # Tighten and save
-    plt.tight_layout()
+    # Group into weeks
+    weeks = []
+    current_week = []
+    
+    for idx, row in schedule_df_copy.iterrows():
+        current_week.append(row)
+        
+        # If we hit Wednesday or end of data, save the week
+        if row['day_of_week'] == 'Wednesday' or idx == len(schedule_df_copy) - 1:
+            weeks.append(current_week)
+            current_week = []
+    
+    # Image dimensions
+    cell_width = 200
+    cell_height = 50
+    header_height = 60
+    title_height = 80
+    padding = 20
+    
+    cols = 4  # Day label + 3 staff slots
+    rows_per_week = 4  # Header + Mon + Tue + Wed
+    total_rows = sum(rows_per_week for _ in weeks)
+    
+    img_width = cols * cell_width + 2 * padding
+    img_height = title_height + total_rows * cell_height + 2 * padding
+    
+    # Create image
+    img = Image.new('RGB', (img_width, img_height), 'white')
+    draw = ImageDraw.Draw(img)
+    
+    # Load fonts (fallback to default if custom not available)
+    try:
+        title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
+        header_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+        cell_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+    except:
+        title_font = ImageFont.load_default()
+        header_font = ImageFont.load_default()
+        cell_font = ImageFont.load_default()
+    
+    # Colors
+    maroon = '#8B0000'
+    pink = '#FFB6D9'
+    light_gray = '#F5F5F5'
+    border = '#CCCCCC'
+    
+    # Draw title
+    title = f"{month_name} {year} - Lunch Duty Schedule"
+    title_bbox = draw.textbbox((0, 0), title, font=title_font)
+    title_width = title_bbox[2] - title_bbox[0]
+    draw.text(((img_width - title_width) // 2, padding + 10), title, fill=maroon, font=title_font)
+    
+    # Starting Y position for tables
+    y = title_height + padding
+    
+    # Draw each week
+    for week_idx, week in enumerate(weeks):
+        # Week header
+        draw.rectangle([padding, y, img_width - padding, y + header_height], fill=maroon, outline=border, width=2)
+        
+        # Column headers
+        headers = ['Day', 'Main Room 1', 'Main Room 2', 'Quiet Room']
+        for col_idx, header in enumerate(headers):
+            x = padding + col_idx * cell_width
+            header_bbox = draw.textbbox((0, 0), header, font=header_font)
+            header_width = header_bbox[2] - header_bbox[0]
+            header_height_text = header_bbox[3] - header_bbox[1]
+            draw.text(
+                (x + (cell_width - header_width) // 2, y + (header_height - header_height_text) // 2),
+                header, fill='white', font=header_font
+            )
+        
+        y += header_height
+        
+        # Draw days in the week
+        day_names = ['Monday', 'Tuesday', 'Wednesday']
+        for day_idx in range(3):
+            # Get data for this day (if exists)
+            if day_idx < len(week):
+                row_data = week[day_idx]
+                day_date = row_data['date_parsed'].strftime('%b %d')
+                main_1 = row_data['main_room_1']
+                main_2 = row_data['main_room_2']
+                quiet = row_data['quiet_room']
+            else:
+                day_date = ''
+                main_1 = main_2 = quiet = 'NO LUNCH'
+            
+            # Alternate row background
+            row_bg = light_gray if day_idx % 2 == 0 else 'white'
+            
+            # Draw day cell
+            draw.rectangle([padding, y, padding + cell_width, y + cell_height], 
+                          fill=row_bg, outline=border, width=1)
+            day_text = f"{day_names[day_idx]}\n{day_date}"
+            draw.text((padding + 10, y + 10), day_text, fill='black', font=cell_font)
+            
+            # Draw main room 1
+            draw.rectangle([padding + cell_width, y, padding + 2*cell_width, y + cell_height],
+                          fill=row_bg, outline=border, width=1)
+            text_bbox = draw.textbbox((0, 0), main_1, font=cell_font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            draw.text((padding + cell_width + (cell_width - text_width) // 2, 
+                      y + (cell_height - text_height) // 2), 
+                     main_1, fill='black', font=cell_font)
+            
+            # Draw main room 2
+            draw.rectangle([padding + 2*cell_width, y, padding + 3*cell_width, y + cell_height],
+                          fill=row_bg, outline=border, width=1)
+            text_bbox = draw.textbbox((0, 0), main_2, font=cell_font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            draw.text((padding + 2*cell_width + (cell_width - text_width) // 2,
+                      y + (cell_height - text_height) // 2),
+                     main_2, fill='black', font=cell_font)
+            
+            # Draw quiet room (pink background)
+            quiet_bg = pink if quiet != 'NO LUNCH' else row_bg
+            draw.rectangle([padding + 3*cell_width, y, padding + 4*cell_width, y + cell_height],
+                          fill=quiet_bg, outline=border, width=1)
+            text_bbox = draw.textbbox((0, 0), quiet, font=cell_font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+            draw.text((padding + 3*cell_width + (cell_width - text_width) // 2,
+                      y + (cell_height - text_height) // 2),
+                     quiet, fill='black', font=cell_font)
+            
+            y += cell_height
+        
+        # Add spacing between weeks
+        y += 20
+    
+    # Save to buffer
     buf = BytesIO()
-    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight', transparent=False)
+    img.save(buf, format='PNG', quality=95)
     buf.seek(0)
-    plt.close()
+    
     return buf
 
 
