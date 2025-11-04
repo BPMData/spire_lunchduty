@@ -712,7 +712,7 @@ calendar_file = st.sidebar.file_uploader("Upload Calendar CSV", type=['csv'],
 staff_file = st.sidebar.file_uploader("Upload Staff Availability CSV", type=['csv'],
                                        help="Staff names and Mon/Tue/Wed availability (1=available, 0=not)")
 
-use_seed = st.sidebar.checkbox("Use random seed (for reproducible results)", value=True)
+use_seed = st.sidebar.checkbox("Uncheck this box to use a random seed (for random results). Set a seed to ensure the same semi-random schedule is generated every time if you re-use that seed.", value=True)
 if use_seed:
     seed_value = st.sidebar.number_input("Random Seed", min_value=0, max_value=9999, value=42, step=1)
 else:
