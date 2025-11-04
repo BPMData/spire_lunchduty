@@ -801,7 +801,7 @@ if calendar_file and staff_file:
         required_staff_cols = ['name', 'Monday', 'Tuesday', 'Wednesday']
         missing_staff_cols = [col for col in required_staff_cols if col not in staff_df.columns]
         if missing_staff_cols:
-            st.error(f"❌ Staff CSV missing required columns: {', '.join(missing_Sstaff_cols)}. Found: {', '.join(staff_df.columns)}")
+            st.error(f"❌ Staff CSV missing required columns: {', '.join(missing_staff_cols)}. Found: {', '.join(staff_df.columns)}")
             st.stop()
 
         # Add optional column for scheduling constraints if not present
