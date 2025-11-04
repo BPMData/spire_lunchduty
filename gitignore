@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+
+# Streamlit
+.streamlit/
+
+# Data files (optional - uncomment if you don't want to commit data)
+# *.csv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
