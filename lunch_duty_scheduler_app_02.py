@@ -5,15 +5,13 @@ import random
 from datetime import datetime
 import io
 from io import BytesIO
-import zipfile  # <-- Added for zipping PNGs
+import zipfile  # For zipping PNGs
 
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-# import matplotlib.pyplot as plt # No longer needed for PIL-based PNG
-# from matplotlib.patches import Rectangle # No longer needed for PIL-based PNG
 from PIL import Image, ImageDraw, ImageFont
 
 
@@ -24,7 +22,9 @@ st.markdown("*Automated fair scheduling for Mon/Tue/Wed lunch duties*")
 
 # ==================== SESSION STATE INITIALIZATION ====================
 if "schedule_df" not in st.session_state:
-    st.session_state.schedule_df = None
+    st.session_state.schedule_df = None # DF with only duty days + assignments
+if "period_calendar_df" not in st.session_state:
+    st.session_state.period_calendar_df = None # DF with ALL Mon/Tue/Wed for the period
 if "summary_df" not in st.session_state:
     st.session_state.summary_df = None
 if "schedule_ready" not in st.session_state:
@@ -32,7 +32,7 @@ if "schedule_ready" not in st.session_state:
 if "month_name" not in st.session_state:
     st.session_state.month_name = "Full Year"
 if "year_val" not in st.session_state:
-    st.session_state.year_val = 2025 # Used for naming convention
+    st.session_state.year_val = 2025
 
 # ==================== HELPER FUNCTIONS ====================
 
@@ -49,6 +49,12 @@ def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
 
     schedule = []
     total_slots = len(duty_days_df) * 3
+    
+    # Avoid division by zero if no staff
+    if len(staff_names) == 0:
+        st.error("❌ Staff list is empty. Cannot generate schedule.")
+        return pd.DataFrame(), pd.DataFrame()
+        
     target_duties = total_slots // len(staff_names)
 
     for idx, row in duty_days_df.iterrows():
@@ -101,7 +107,7 @@ def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
         schedule.append({
             'date': date,
             'date_parsed': date_parsed,
-            'day_of_week': day_of_week,
+            'day_of_week_duty': day_of_week, # Use different column names to avoid merge conflicts
             'main_room_1': main_room_staff[0] if len(main_room_staff) > 0 else 'UNASSIGNED',
             'main_room_2': main_room_staff[1] if len(main_room_staff) > 1 else 'UNASSIGNED',
             'quiet_room': quiet_room_staff
@@ -120,13 +126,15 @@ def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
     return schedule_df, summary
 
 
-def create_pdf_schedule(schedule_df, month_name, year):
+def create_pdf_schedule(schedule_df, period_calendar_df, month_name, year):
     """
     Create a nicely formatted PDF of the schedule.
     Handles both single-month and multi-month (full year) requests.
+    Uses period_calendar_df for all days, and schedule_df for duty assignments.
     """
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), topMargin=0.5*inch, bottomMargin=0.5*inch)
+    # FIX 1: Reduced margins
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), topMargin=0.3*inch, bottomMargin=0.3*inch)
     elements = []
     styles = getSampleStyleSheet()
 
@@ -151,76 +159,98 @@ def create_pdf_schedule(schedule_df, month_name, year):
         'Legend',
         parent=styles['Normal'],
         fontSize=9,
-        textColor=colors.grey
+        textColor=colors.grey,
+        alignment=0
     )
     
-    schedule_df_copy = schedule_df.copy()
-    schedule_df_copy['week'] = schedule_df_copy['date_parsed'].dt.isocalendar().week
-    schedule_df_copy['month'] = schedule_df_copy['date_parsed'].dt.month
-    schedule_df_copy['year'] = schedule_df_copy['date_parsed'].dt.year
+    # Merge all days with duty days
+    # period_calendar_df has columns: date, day_of_week, needs_duty, date_parsed
+    # schedule_df has columns: date_parsed, main_room_1, main_room_2, quiet_room, ...
+    
+    # Ensure 'date_parsed' is datetime in both
+    period_calendar_df['date_parsed'] = pd.to_datetime(period_calendar_df['date_parsed'])
+    schedule_df['date_parsed'] = pd.to_datetime(schedule_df['date_parsed'])
+
+    merged_df = period_calendar_df.merge(
+        schedule_df.drop(columns=['date'], errors='ignore'), # Drop 'date' from schedule_df if it exists to avoid conflict
+        on='date_parsed', 
+        how='left'
+    )
+
+    merged_df['week'] = merged_df['date_parsed'].dt.isocalendar().week
+    merged_df['month'] = merged_df['date_parsed'].dt.month
+    merged_df['year'] = merged_df['date_parsed'].dt.year
 
     # --- Logic for Full Year (Multi-Month) ---
     if month_name == "Full Year":
-        # 1. Add Title Page
         title = Paragraph("Spire School Lunch Duty Schedule", main_title_style)
         subtitle = Paragraph("Full 2025-2026 Academic Year", month_title_style)
         elements.append(title)
         elements.append(subtitle)
         elements.append(PageBreak())
 
-        # 2. Loop through each month
-        unique_months = schedule_df_copy[['year', 'month']].drop_duplicates().sort_values(['year', 'month'])
+        unique_months = merged_df[['year', 'month']].drop_duplicates().sort_values(['year', 'month'])
         
         for idx, row in unique_months.iterrows():
             current_year = row['year']
             current_month = row['month']
             
-            month_df = schedule_df_copy[(schedule_df_copy['year'] == current_year) & 
-                                        (schedule_df_copy['month'] == current_month)]
+            month_df = merged_df[(merged_df['year'] == current_year) & 
+                                 (merged_df['month'] == current_month)]
             
             if len(month_df) == 0:
                 continue
 
-            # 3. Add Monthly Title
             month_name_str = month_df['date_parsed'].iloc[0].strftime('%B')
             month_title = Paragraph(f"{month_name_str} {current_year} - Lunch Duty Schedule", month_title_style)
             elements.append(month_title)
 
-            # 4. Loop through weeks *within* that month
             weeks_in_month = month_df['week'].unique()
             for week_num in sorted(weeks_in_month):
                 week_data = month_df[month_df['week'] == week_num]
                 
-                # (Existing table-building logic)
                 if len(week_data) > 0:
                     table_data = [['Monday', 'Tuesday', 'Wednesday']]
-
-                    mon = week_data[week_data['day_of_week'] == 'Monday']
-                    tue = week_data[week_data['day_of_week'] == 'Tuesday']
-                    wed = week_data[week_data['day_of_week'] == 'Wednesday']
-
-                    mon_date = mon.iloc[0]['date'].split(',')[1].strip() if len(mon) > 0 else 'N/A'
-                    tue_date = tue.iloc[0]['date'].split(',')[1].strip() if len(tue) > 0 else 'N/A'
-                    wed_date = wed.iloc[0]['date'].split(',')[1].strip() if len(wed) > 0 else 'N/A'
+                    days_in_week = {}
+                    for day_name in ['Monday', 'Tuesday', 'Wednesday']:
+                        day_df = week_data[week_data['day_of_week'] == day_name]
+                        if not day_df.empty:
+                            days_in_week[day_name] = day_df.iloc[0]
+                        else:
+                            days_in_week[day_name] = None
+                    
+                    # FIX 2: Always show date, even if N/A (though N/A shouldn't happen now)
+                    mon_date = days_in_week['Monday']['date_parsed'].strftime('%b %d') if days_in_week['Monday'] is not None else 'N/A'
+                    tue_date = days_in_week['Tuesday']['date_parsed'].strftime('%b %d') if days_in_week['Tuesday'] is not None else 'N/A'
+                    wed_date = days_in_week['Wednesday']['date_parsed'].strftime('%b %d') if days_in_week['Wednesday'] is not None else 'N/A'
 
                     table_data[0] = [f"Monday {mon_date}", f"Tuesday {tue_date}", f"Wednesday {wed_date}"]
-
-                    for i in range(3):
+                    
+                    cell_styles = [] # To hold background colors
+                    
+                    for i in range(3): # For rows: Main 1, Main 2, Quiet
                         row_list = []
-                        for day in ['Monday', 'Tuesday', 'Wednesday']:
-                            day_data = week_data[week_data['day_of_week'] == day]
-                            if len(day_data) > 0:
-                                if i == 2:
-                                    staff = day_data.iloc[0]['quiet_room']
-                                else:
-                                    staff = day_data.iloc[0]['main_room_1'] if i == 0 else day_data.iloc[0]['main_room_2']
-                                row_list.append(staff if staff != 'UNASSIGNED' else '')
-                            else:
+                        for c_idx, day in enumerate(['Monday', 'Tuesday', 'Wednesday']):
+                            day_data = days_in_week[day]
+                            
+                            # Check if it's a "NO LUNCH" day
+                            if day_data is None or pd.isna(day_data.get('main_room_1')):
                                 row_list.append('NO LUNCH')
+                                cell_styles.append(('BACKGROUND', (c_idx, i+1), (c_idx, i+1), colors.HexColor('#E0E0E0')))
+                            else:
+                                # It is a duty day
+                                if i == 2:
+                                    staff = day_data['quiet_room']
+                                    cell_styles.append(('BACKGROUND', (c_idx, i+1), (c_idx, i+1), colors.HexColor('#FFB6D9')))
+                                else:
+                                    staff = day_data['main_room_1'] if i == 0 else day_data['main_room_2']
+                                    cell_styles.append(('BACKGROUND', (c_idx, i+1), (c_idx, i+1), colors.white))
+                                row_list.append(staff if staff != 'UNASSIGNED' else '')
                         table_data.append(row_list)
 
                     table = Table(table_data, colWidths=[2.5*inch, 2.5*inch, 2.5*inch])
-                    table.setStyle(TableStyle([
+                    
+                    table_style_base = [
                         ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8B0000')),
                         ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                         ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -230,16 +260,21 @@ def create_pdf_schedule(schedule_df, month_name, year):
                         ('FONTSIZE', (0, 1), (-1, -1), 10),
                         ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
                         ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FFB6D9')]),
-                        ('HEIGHT', (0, 0), (-1, -1), 0.6*inch),
-                    ]))
+                        ('HEIGHT', (0, 0), (-1, -1), 0.5*inch), # FIX 1: Reduced row height
+                    ]
+                    
+                    table_style_base.extend(cell_styles) # Add conditional cell colors
+                    table.setStyle(TableStyle(table_style_base))
 
                     elements.append(table)
-                    elements.append(Spacer(1, 0.3*inch))
+                    elements.append(Spacer(1, 0.2*inch)) # FIX 1: Reduced spacer
+
+            legend_items = [
+                Paragraph("■ Pink = Quiet Lunch Room", legend_style),
+                Paragraph("■ Gray = No Lunch Duty", legend_style)
+            ]
             
-            # 5. Add Legend and Page Break after each month
-            legend = Paragraph("🟩 Pink = Quiet Lunch Room Assignment", legend_style)
-            elements.append(legend)
+            elements.extend(legend_items)
             elements.append(PageBreak())
 
     # --- Logic for Single Month ---
@@ -248,37 +283,50 @@ def create_pdf_schedule(schedule_df, month_name, year):
         title = Paragraph(title_text, main_title_style)
         elements.append(title)
 
-        weeks = schedule_df_copy['week'].unique()
+        weeks = merged_df['week'].unique()
 
         for week_num in sorted(weeks):
-            week_data = schedule_df_copy[schedule_df_copy['week'] == week_num]
-
+            week_data = merged_df[merged_df['week'] == week_num]
+            
             if len(week_data) > 0:
                 table_data = [['Monday', 'Tuesday', 'Wednesday']]
-                # (Same table-building logic as above)
-                mon = week_data[week_data['day_of_week'] == 'Monday']
-                tue = week_data[week_data['day_of_week'] == 'Tuesday']
-                wed = week_data[week_data['day_of_week'] == 'Wednesday']
-                mon_date = mon.iloc[0]['date'].split(',')[1].strip() if len(mon) > 0 else 'N/A'
-                tue_date = tue.iloc[0]['date'].split(',')[1].strip() if len(tue) > 0 else 'N/A'
-                wed_date = wed.iloc[0]['date'].split(',')[1].strip() if len(wed) > 0 else 'N/A'
+                days_in_week = {}
+                for day_name in ['Monday', 'Tuesday', 'Wednesday']:
+                    day_df = week_data[week_data['day_of_week'] == day_name]
+                    if not day_df.empty:
+                        days_in_week[day_name] = day_df.iloc[0]
+                    else:
+                        days_in_week[day_name] = None
+                
+                mon_date = days_in_week['Monday']['date_parsed'].strftime('%b %d') if days_in_week['Monday'] is not None else 'N/A'
+                tue_date = days_in_week['Tuesday']['date_parsed'].strftime('%b %d') if days_in_week['Tuesday'] is not None else 'N/A'
+                wed_date = days_in_week['Wednesday']['date_parsed'].strftime('%b %d') if days_in_week['Wednesday'] is not None else 'N/A'
+                
                 table_data[0] = [f"Monday {mon_date}", f"Tuesday {tue_date}", f"Wednesday {wed_date}"]
-                for i in range(3):
+                
+                cell_styles = [] # To hold background colors
+
+                for i in range(3): # For rows: Main 1, Main 2, Quiet
                     row_list = []
-                    for day in ['Monday', 'Tuesday', 'Wednesday']:
-                        day_data = week_data[week_data['day_of_week'] == day]
-                        if len(day_data) > 0:
-                            if i == 2:
-                                staff = day_data.iloc[0]['quiet_room']
-                            else:
-                                staff = day_data.iloc[0]['main_room_1'] if i == 0 else day_data.iloc[0]['main_room_2']
-                            row_list.append(staff if staff != 'UNASSIGNED' else '')
-                        else:
+                    for c_idx, day in enumerate(['Monday', 'Tuesday', 'Wednesday']):
+                        day_data = days_in_week[day]
+                        
+                        if day_data is None or pd.isna(day_data.get('main_room_1')):
                             row_list.append('NO LUNCH')
+                            cell_styles.append(('BACKGROUND', (c_idx, i+1), (c_idx, i+1), colors.HexColor('#E0E0E0')))
+                        else:
+                            if i == 2:
+                                staff = day_data['quiet_room']
+                                cell_styles.append(('BACKGROUND', (c_idx, i+1), (c_idx, i+1), colors.HexColor('#FFB6D9')))
+                            else:
+                                staff = day_data['main_room_1'] if i == 0 else day_data['main_room_2']
+                                cell_styles.append(('BACKGROUND', (c_idx, i+1), (c_idx, i+1), colors.white))
+                            row_list.append(staff if staff != 'UNASSIGNED' else '')
                     table_data.append(row_list)
                 
                 table = Table(table_data, colWidths=[2.5*inch, 2.5*inch, 2.5*inch])
-                table.setStyle(TableStyle([
+                
+                table_style_base = [
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8B0000')),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
@@ -288,14 +336,20 @@ def create_pdf_schedule(schedule_df, month_name, year):
                     ('FONTSIZE', (0, 1), (-1, -1), 10),
                     ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
                     ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#FFB6D9')]),
-                    ('HEIGHT', (0, 0), (-1, -1), 0.6*inch),
-                ]))
+                    ('HEIGHT', (0, 0), (-1, -1), 0.5*inch), # FIX 1
+                ]
+                
+                table_style_base.extend(cell_styles)
+                table.setStyle(TableStyle(table_style_base))
+
                 elements.append(table)
-                elements.append(Spacer(1, 0.3*inch))
-        
-        legend = Paragraph("🟩 Pink = Quiet Lunch Room Assignment", legend_style)
-        elements.append(legend)
+                elements.append(Spacer(1, 0.2*inch)) # FIX 1
+
+        legend_items = [
+            Paragraph("■ Pink = Quiet Lunch Room", legend_style),
+            Paragraph("■ Gray = No Lunch Duty", legend_style)
+        ]
+        elements.extend(legend_items)
 
     # Build the PDF
     doc.build(elements)
@@ -303,27 +357,35 @@ def create_pdf_schedule(schedule_df, month_name, year):
     return buffer
 
 
-def create_single_png_schedule(schedule_df, month_name, year):
+def create_single_png_schedule(schedule_df, period_calendar_df, month_name, year):
     """
     Create a clean PNG image for a SINGLE month's schedule using Pillow.
+    FIX: Now uses period_calendar_df to show ALL days, not just duty days.
     """
-    # Prepare data
-    schedule_df_copy = schedule_df.copy()
-    schedule_df_copy['date_parsed'] = pd.to_datetime(schedule_df_copy['date_parsed'])
-    schedule_df_copy = schedule_df_copy.sort_values('date_parsed').reset_index(drop=True)
+    # Merge all days with duty days
+    period_calendar_df['date_parsed'] = pd.to_datetime(period_calendar_df['date_parsed'])
+    schedule_df['date_parsed'] = pd.to_datetime(schedule_df['date_parsed'])
+
+    merged_df = period_calendar_df.merge(
+        schedule_df.drop(columns=['date'], errors='ignore'), 
+        on=['date_parsed', 'day_of_week'], # Merge on both
+        how='left',
+        suffixes=('', '_duty')
+    )
+    
+    # Fill NaNs for non-duty days
+    merged_df['main_room_1'] = merged_df['main_room_1'].fillna('NO LUNCH')
+    merged_df['main_room_2'] = merged_df['main_room_2'].fillna('NO LUNCH')
+    merged_df['quiet_room'] = merged_df['quiet_room'].fillna('NO LUNCH')
+    
+    merged_df = merged_df.sort_values('date_parsed').reset_index(drop=True)
     
     # Group into weeks
+    merged_df['week_num'] = merged_df['date_parsed'].dt.isocalendar().week
     weeks = []
-    current_week = []
-    
-    for idx, row in schedule_df_copy.iterrows():
-        current_week.append(row)
-        
-        # If we hit Wednesday or end of data, save the week
-        if row['day_of_week'] == 'Wednesday' or idx == len(schedule_df_copy) - 1:
-            weeks.append(current_week)
-            current_week = []
-    
+    for week_num in sorted(merged_df['week_num'].unique()):
+        weeks.append(merged_df[merged_df['week_num'] == week_num])
+
     # Image dimensions
     cell_width = 250
     cell_height = 60
@@ -336,58 +398,45 @@ def create_single_png_schedule(schedule_df, month_name, year):
     rows_per_week = 4  # Header + Mon + Tue + Wed
     total_weeks = len(weeks)
     
-    # Calculate height based on number of weeks for THIS month
     img_width = cols * cell_width + 2 * padding
     img_height = title_height + (total_weeks * (rows_per_week * cell_height + week_spacing)) + padding
     
-    # Create image
     img = Image.new('RGB', (img_width, img_height), 'white')
     draw = ImageDraw.Draw(img)
     
-    # Load fonts (fallback to default if custom not available)
     try:
-        # Using common font paths
         title_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 32)
         header_font = ImageFont.truetype("DejaVuSans-Bold.ttf", 16)
         cell_font = ImageFont.truetype("DejaVuSans.ttf", 14)
     except IOError:
         try:
-            # Fallback for other systems
             title_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 32)
             header_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
             cell_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
         except IOError:
-            # Absolute fallback
             title_font = ImageFont.load_default()
             header_font = ImageFont.load_default()
             cell_font = ImageFont.load_default()
     
-    # Colors
     maroon = '#8B0000'
     pink = '#FFB6D9'
-    light_gray = '#F5F5F5'
+    light_gray = '#F5F5F5' # Light gray for alternating rows (duty)
+    no_lunch_gray = '#E0E0E0' # Gray for "NO LUNCH" days
     border = '#CCCCCC'
     
-    # Draw title
-    if month_name == "Full Year":
-        # This function should ideally be called per-month, but handling it just in case
-        title = "Full 2025-2026 Year - Lunch Duty Schedule"
-    else:
-        title = f"{month_name} {year} - Lunch Duty Schedule"
-        
+    title = f"{month_name} {year} - Lunch Duty Schedule"
     title_bbox = draw.textbbox((0, 0), title, font=title_font)
     title_width = title_bbox[2] - title_bbox[0]
     draw.text(((img_width - title_width) // 2, padding + 10), title, fill=maroon, font=title_font)
     
-    # Starting Y position for tables
     y = title_height + padding
     
+    day_names = ['Monday', 'Tuesday', 'Wednesday']
+    
     # Draw each week
-    for week_idx, week in enumerate(weeks):
-        # Week header
+    for week_data in weeks: # week_data is now a DataFrame
         draw.rectangle([padding, y, img_width - padding, y + header_height], fill=maroon, outline=border, width=2)
         
-        # Column headers
         headers = ['Day', 'Cafeteria', 'Quiet Room']
         for col_idx, header in enumerate(headers):
             x = padding + col_idx * cell_width
@@ -402,40 +451,51 @@ def create_single_png_schedule(schedule_df, month_name, year):
         y += header_height
         
         # Draw days in the week
-        day_names = ['Monday', 'Tuesday', 'Wednesday']
         for day_idx in range(3):
-            # Get data for this day (if exists)
-            row_data = None
-            for day_data in week:
-                if day_data['day_of_week'] == day_names[day_idx]:
-                    row_data = day_data
-                    break
-            
-            if row_data is not None:
+            day_name = day_names[day_idx]
+            row_data_series = week_data[week_data['day_of_week'] == day_name]
+
+            if not row_data_series.empty:
+                row_data = row_data_series.iloc[0]
+                # FIX 2: Always show date
                 day_date = row_data['date_parsed'].strftime('%b %d')
                 main_1 = row_data['main_room_1']
                 main_2 = row_data['main_room_2']
                 quiet = row_data['quiet_room']
+                is_no_lunch = (main_1 == 'NO LUNCH')
             else:
+                # This day is not in the month (e.g., month starts on Tue)
                 day_date = ''
-                main_1 = main_2 = quiet = 'NO LUNCH'
+                main_1 = main_2 = quiet = ' '
+                is_no_lunch = True # Treat as empty
             
-            # Alternate row background
-            row_bg = light_gray if day_idx % 2 == 0 else 'white'
-            
+            day_text = f"{day_names[day_idx]}\n{day_date}"
+
+            # Determine background color
+            if is_no_lunch and day_date == '':
+                row_bg = 'white' # Blank day, just white
+                cafeteria_text = ' '
+                quiet_text = ' '
+            elif is_no_lunch:
+                row_bg = no_lunch_gray # FIX 2: "NO LUNCH" day
+                cafeteria_text = 'NO LUNCH'
+                quiet_text = 'NO LUNCH'
+            else:
+                row_bg = light_gray if day_idx % 2 == 0 else 'white' # Standard duty day
+                cafeteria_text = f"{main_1}\n{main_2}"
+                quiet_text = quiet
+
             # Draw day cell
             draw.rectangle([padding, y, padding + cell_width, y + cell_height], 
                           fill=row_bg, outline=border, width=1)
-            day_text = f"{day_names[day_idx]}\n{day_date}"
             draw.text((padding + 10, y + 10), day_text, fill='black', font=cell_font)
             
-            # Draw cafeteria (combined main rooms)
-            cafeteria_text = f"{main_1}\n{main_2}" if main_1 != 'NO LUNCH' else 'NO LUNCH'
+            # Draw cafeteria
             draw.rectangle([padding + cell_width, y, padding + 2*cell_width, y + cell_height],
                           fill=row_bg, outline=border, width=1)
             lines = cafeteria_text.split('\n')
             line_height_bbox = draw.textbbox((0,0), "Tg", font=cell_font)
-            line_height = (line_height_bbox[3] - line_height_bbox[1]) + 4 # Add 4px spacing
+            line_height = (line_height_bbox[3] - line_height_bbox[1]) + 4
             start_y = y + (cell_height - len(lines) * line_height) // 2
             for i, line in enumerate(lines):
                 text_bbox = draw.textbbox((0, 0), line, font=cell_font)
@@ -444,23 +504,21 @@ def create_single_png_schedule(schedule_df, month_name, year):
                           start_y + i * line_height), 
                          line, fill='black', font=cell_font)
             
-            # Draw quiet room (pink background)
-            quiet_bg = pink if quiet != 'NO LUNCH' else row_bg
+            # Draw quiet room
+            quiet_bg = pink if not is_no_lunch else row_bg
             draw.rectangle([padding + 2*cell_width, y, padding + 3*cell_width, y + cell_height],
                           fill=quiet_bg, outline=border, width=1)
-            text_bbox = draw.textbbox((0, 0), quiet, font=cell_font)
+            text_bbox = draw.textbbox((0, 0), quiet_text, font=cell_font)
             text_width = text_bbox[2] - text_bbox[0]
             text_height = text_bbox[3] - text_bbox[1]
             draw.text((padding + 2*cell_width + (cell_width - text_width) // 2,
                       y + (cell_height - text_height) // 2),
-                     quiet, fill='black', font=cell_font)
+                     quiet_text, fill='black', font=cell_font)
             
             y += cell_height
         
-        # Add spacing between weeks
         y += week_spacing
     
-    # Save to buffer
     buf = BytesIO()
     img.save(buf, format='PNG', quality=95)
     buf.seek(0)
@@ -468,38 +526,58 @@ def create_single_png_schedule(schedule_df, month_name, year):
     return buf
 
 
-def create_png_zip_schedule(schedule_df):
+def create_png_zip_schedule(schedule_df, period_calendar_df):
     """
     Creates a Zip file in memory containing one PNG per month.
     """
     zip_buffer = BytesIO()
     
+    # We need to merge here too, to pass the right data to create_single_png_schedule
+    period_calendar_df['date_parsed'] = pd.to_datetime(period_calendar_df['date_parsed'])
+    schedule_df['date_parsed'] = pd.to_datetime(schedule_df['date_parsed'])
+    
+    merged_df = period_calendar_df.merge(
+        schedule_df.drop(columns=['date'], errors='ignore'), 
+        on='date_parsed', 
+        how='left',
+        suffixes=('', '_duty')
+    )
+    
+    merged_df['month'] = merged_df['date_parsed'].dt.month
+    merged_df['year'] = merged_df['date_parsed'].dt.year
+    
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        schedule_df_copy = schedule_df.copy()
-        schedule_df_copy['month'] = schedule_df_copy['date_parsed'].dt.month
-        schedule_df_copy['year'] = schedule_df_copy['date_parsed'].dt.year
-        
-        unique_months = schedule_df_copy[['year', 'month']].drop_duplicates().sort_values(['year', 'month'])
+        unique_months = merged_df[['year', 'month']].drop_duplicates().sort_values(['year', 'month'])
         
         for idx, row in unique_months.iterrows():
             current_year = row['year']
             current_month = row['month']
             
-            month_df = schedule_df_copy[(schedule_df_copy['year'] == current_year) & 
-                                        (schedule_df_copy['month'] == current_month)]
+            # Get all days for this month
+            month_calendar_df = period_calendar_df[
+                (period_calendar_df['date_parsed'].dt.year == current_year) & 
+                (period_calendar_df['date_parsed'].dt.month == current_month)
+            ]
+            # Get only duty days for this month
+            month_schedule_df = schedule_df[
+                (schedule_df['date_parsed'].dt.year == current_year) & 
+                (schedule_df['date_parsed'].dt.month == current_month)
+            ]
             
-            if len(month_df) == 0:
+            if len(month_calendar_df) == 0:
                 continue
 
-            month_name_str = month_df['date_parsed'].iloc[0].strftime('%B')
+            month_name_str = month_calendar_df['date_parsed'].iloc[0].strftime('%B')
             
             # Generate the PNG for this single month
-            png_buffer = create_single_png_schedule(month_df, month_name_str, current_year)
+            png_buffer = create_single_png_schedule(
+                month_schedule_df, 
+                month_calendar_df, 
+                month_name_str, 
+                current_year
+            )
             
-            # Create a clean filename for the PNG inside the zip
             png_filename = f"Spire_Lunch_Duty_{current_year}_{current_month:02d}_{month_name_str}.png"
-            
-            # Write the PNG data to the zip file
             zip_file.writestr(png_filename, png_buffer.getvalue())
 
     zip_buffer.seek(0)
@@ -550,7 +628,6 @@ if calendar_file and staff_file:
         if 'Unnamed: 0' in staff_df.columns:
             staff_df = staff_df.rename(columns={'Unnamed: 0': 'name'})
         
-        # Handle flexible 'name' column
         if staff_df.columns[0] not in ['name', 'Name']:
              staff_df.columns = ['name'] + list(staff_df.columns[1:])
         elif staff_df.columns[0] == 'Name':
@@ -568,9 +645,16 @@ if calendar_file and staff_file:
             st.error(f"❌ Error parsing dates in calendar. Expected format: 'Monday, August 25, 2025'\nError: {str(e)}")
             st.stop()
 
-        duty_days_all = calendar_df[calendar_df['needs_duty'] == 1].copy()
-        duty_days_all = duty_days_all.sort_values('date_parsed').reset_index(drop=True)
+        # Get ALL Mon/Tue/Wed for potential scheduling
+        all_days_for_period = calendar_df[
+            (calendar_df['day_of_week'] == 'Monday') |
+            (calendar_df['day_of_week'] == 'Tuesday') |
+            (calendar_df['day_of_week'] == 'Wednesday')
+        ].copy()
 
+        # Get only days that NEED duty
+        duty_days_all = calendar_df[calendar_df['needs_duty'] == 1].copy()
+        
         if len(duty_days_all) == 0:
             st.error("❌ No duty days found in calendar (needs_duty = 1)")
             st.stop()
@@ -584,22 +668,32 @@ if calendar_file and staff_file:
                 'May 2026': (2026, 5), 'June 2026': (2026, 6)
             }
             year, month = month_mapping[selected_month]
-            duty_days_filtered = duty_days_all[(duty_days_all['date_parsed'].dt.year == year) & 
-                                               (duty_days_all['date_parsed'].dt.month == month)].copy()
-
-            if len(duty_days_filtered) == 0:
-                st.warning(f"⚠️ No duty days found for {selected_month}")
-                st.stop()
             
-            duty_days_to_schedule = duty_days_filtered
+            # Filter duty days
+            duty_days_to_schedule = duty_days_all[
+                (duty_days_all['date_parsed'].dt.year == year) & 
+                (duty_days_all['date_parsed'].dt.month == month)
+            ].copy()
+
+            # Filter ALL days for the period
+            period_calendar_df = all_days_for_period[
+                (all_days_for_period['date_parsed'].dt.year == year) & 
+                (all_days_for_period['date_parsed'].dt.month == month)
+            ].copy()
+
+            if len(duty_days_to_schedule) == 0:
+                st.warning(f"⚠️ No duty days found for {selected_month}")
+                # We don't st.stop() here, because we still want to show a blank schedule
+            
             current_period_name = selected_month
             current_year_val = year
             current_month_name = selected_month.split()[0]
 
         else:
             duty_days_to_schedule = duty_days_all
+            period_calendar_df = all_days_for_period # Use all Mon/Tue/Wed
             current_period_name = "Full 2025-2026 Year"
-            current_year_val = 2025 # Base year for "Full Year"
+            current_year_val = 2025 
             current_month_name = "Full Year"
 
 
@@ -619,31 +713,31 @@ if calendar_file and staff_file:
                 try:
                     schedule_df, summary_df = generate_lunch_duty_schedule(duty_days_to_schedule, staff_df, seed=seed_value)
                     
-                    # Save all results to session state
                     st.session_state.schedule_df = schedule_df
                     st.session_state.summary_df = summary_df
                     st.session_state.schedule_ready = True
                     
-                    # Save the *period* that was just generated for filenames and success msg
+                    # FIX: Save the complete calendar for this period
+                    st.session_state.period_calendar_df = period_calendar_df 
+                    
                     st.session_state.period_name = current_period_name 
                     st.session_state.month_name = current_month_name
                     st.session_state.year_val = current_year_val
 
                 except Exception as e:
                     st.error(f"❌ Error generating schedule: {str(e)}")
-                    st.exception(e) # Show full traceback in console/app
+                    st.exception(e) 
 
         st.button("🎲 Generate Schedule", type="primary", on_click=generate_schedule)
 
         # ==================== DISPLAY RESULTS (persisted in session state) ====================
         if st.session_state.schedule_ready:
             
-            # --- 1. DYNAMIC SUCCESS MESSAGE (FIXED) ---
-            st.success(f"✅ Schedule for {st.session_state.period_name} ready! ({len(st.session_state.schedule_df)} duty days)")
+            st.success(f"✅ Schedule for {st.session_state.period_name} ready! ({len(st.session_state.schedule_df)} duty days assigned)")
 
             # Display schedule table
-            st.subheader("📋 Duty Schedule")
-            display_schedule = st.session_state.schedule_df[['date', 'day_of_week', 'main_room_1', 'main_room_2', 'quiet_room']].copy()
+            st.subheader("📋 Duty Schedule (Assigned Days Only)")
+            display_schedule = st.session_state.schedule_df.drop(columns=['date_parsed'], errors='ignore')
             display_schedule.columns = ['Date', 'Day', 'Main Room 1', 'Main Room 2', 'Quiet Room']
             st.dataframe(display_schedule, use_container_width=True, height=400)
 
@@ -675,15 +769,10 @@ if calendar_file and staff_file:
             # ==================== EXPORT OPTIONS ====================
             st.subheader("💾 Download Results")
 
-            # --- FILENAME LOGIC (using persisted period name) ---
-            gen_date_str = datetime.now().strftime('%m.%d.%y') # Format: 11.04.25
-            
-            # Use the period name we saved in session state
+            gen_date_str = datetime.now().strftime('%m.%d.%y')
             period_str = st.session_state.period_name
             safe_period_str = period_str.replace(" ", "_").replace("-", "_")
-
             base_filename = f"Spire_Lunch_Duty_{safe_period_str}_gen_on_{gen_date_str}"
-            # --- END FILENAME LOGIC ---
 
             export_format = st.radio("Choose export format:", 
                                     ["CSV (Data)", "PDF (Print-friendly)", "PNG (Image)"],
@@ -693,7 +782,8 @@ if calendar_file and staff_file:
 
             with col1:
                 if export_format == "CSV (Data)":
-                    display_schedule_csv = st.session_state.schedule_df[['date', 'day_of_week', 'main_room_1', 'main_room_2', 'quiet_room']].copy()
+                    # The CSV export remains just the assigned duty days
+                    display_schedule_csv = st.session_state.schedule_df.drop(columns=['date_parsed'], errors='ignore')
                     display_schedule_csv.columns = ['Date', 'Day', 'Main Room 1', 'Main Room 2', 'Quiet Room']
                     schedule_csv_data = display_schedule_csv.to_csv(index=False)
                     st.download_button(
@@ -704,9 +794,12 @@ if calendar_file and staff_file:
                     )
 
                 elif export_format == "PDF (Print-friendly)":
-                    pdf_buffer = create_pdf_schedule(st.session_state.schedule_df, 
-                                                    st.session_state.month_name, # "Full Year" or "September"
-                                                    st.session_state.year_val)
+                    pdf_buffer = create_pdf_schedule(
+                        st.session_state.schedule_df, 
+                        st.session_state.period_calendar_df, # Pass in all days
+                        st.session_state.month_name, 
+                        st.session_state.year_val
+                    )
                     st.download_button(
                         label="📥 Download Schedule PDF",
                         data=pdf_buffer,
@@ -715,10 +808,11 @@ if calendar_file and staff_file:
                     )
 
                 else:  # PNG
-                    # --- 3. PNG ZIP LOGIC (FIXED) ---
                     if st.session_state.month_name == "Full Year":
-                        # Generate a ZIP of monthly PNGs
-                        zip_buffer = create_png_zip_schedule(st.session_state.schedule_df)
+                        zip_buffer = create_png_zip_schedule(
+                            st.session_state.schedule_df,
+                            st.session_state.period_calendar_df # Pass in all days
+                        )
                         st.download_button(
                             label="📥 Download All Monthly PNGs (.zip)",
                             data=zip_buffer,
@@ -726,10 +820,12 @@ if calendar_file and staff_file:
                             mime="application/zip"
                         )
                     else:
-                        # Generate a single PNG for the one month
-                        png_buffer = create_single_png_schedule(st.session_state.schedule_df,
-                                                                st.session_state.month_name,
-                                                                st.session_state.year_val)
+                        png_buffer = create_single_png_schedule(
+                            st.session_state.schedule_df,
+                            st.session_state.period_calendar_df, # Pass in all days
+                            st.session_state.month_name,
+                            st.session_state.year_val
+                        )
                         st.download_button(
                             label="📥 Download Schedule PNG",
                             data=png_buffer,
@@ -748,7 +844,7 @@ if calendar_file and staff_file:
 
     except Exception as e:
         st.error(f"❌ An error occurred. Please check your files and settings.")
-        st.exception(e) # Show full traceback
+        st.exception(e) 
 
 else:
     st.info("👈 Please upload both Calendar and Staff CSV files to begin")
@@ -776,9 +872,9 @@ else:
         - ✅ Fair quiet room rotation
 
         ### Export Formats:
-        - **CSV**: Raw data for further analysis
-        - **PDF**: Professional print-ready schedule. *Full-year export is multi-page with monthly titles.*
-        - **PNG**: Image format. *Full-year export is a .zip file of monthly PNGs.*
+        - **CSV**: Raw data for *assigned duty days only*.
+        - **PDF**: Professional print-ready schedule. *Shows all Mon/Tue/Wed. "NO LUNCH" days are gray.*
+        - **PNG**: Image format. *Shows all Mon/Tue/Wed. "NO LUNCH" days are gray. Full-year export is a .zip.*
 
         ### Tips:
         - Use a random seed for reproducible results
