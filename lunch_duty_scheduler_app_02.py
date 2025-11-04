@@ -4,6 +4,7 @@ import numpy as np
 import random
 from datetime import datetime
 import io
+from io import BytesIO
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
