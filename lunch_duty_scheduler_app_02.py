@@ -764,8 +764,12 @@ def load_calendar_data(uploaded_file):
     
     calendar_df = calendar_df.dropna(subset=['date_parsed'])
     calendar_df['year'] = calendar_df['date_parsed'].dt.year
+    calendar_df['month'] = calendar_df['date_parsed'].dt.month # Create explicit Month Number column
     calendar_df['month_name'] = calendar_df['date_parsed'].dt.strftime('%B')
-    available_months_temp = calendar_df[['year', 'month_name']].drop_duplicates().sort_values(['year', 'month_name'])
+    
+    # Sort by Year first, then by Month Number (1-12), not Month Name (A-Z)
+    available_months_temp = calendar_df[['year', 'month', 'month_name']].drop_duplicates().sort_values(['year', 'month'])
+    
     month_options = [f"{row['month_name']} {row['year']}" for _, row in available_months_temp.iterrows()]
     
     return month_options, calendar_df
