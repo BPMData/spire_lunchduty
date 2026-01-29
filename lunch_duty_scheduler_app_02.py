@@ -40,7 +40,7 @@ class ScheduleConfig:
     PDF_ROW_HEIGHT = 0.5 * inch
 
 
-st.title("🍽️ Spire School Lunch Duty Scheduler")
+st.title("🍽️ Spire School Lunch Duty Scheduler V1.0")
 st.markdown("*Automated fair scheduling for Mon/Tue/Wed lunch duties*")
 
 # ==================== SESSION STATE INITIALIZATION ====================
