@@ -154,7 +154,7 @@ def check_schedule_conflicts(schedule_df, staff_df):
 
 
 def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
-    """Generate fair lunch duty schedule with all constraints"""
+    """Generate fair lunch duty schedule with Fairness Gates + Max 2 constraint"""
     if seed is not None:
         random.seed(seed)
         np.random.seed(seed)
@@ -164,12 +164,11 @@ def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
     quiet_room_count = {name: 0 for name in staff_names}
     last_duty_week = {name: -10 for name in staff_names}
     
-    # Track which staff have the pairing constraint tags
-    # Tag 1: Avoid pairing together (Anti-Pairing)
+    # Track duties per month to enforce the "Max 2" rule
+    monthly_duty_count = {} 
+    
     staff_with_anti_pairing_tag = set(staff_df[staff_df['should_not_be_paired_with_others_with_this_tag'] == 1]['name'].tolist())
-    # Tag 2: Try to pair together (Pro-Pairing)
     staff_with_pro_pairing_tag = set(staff_df[staff_df['should_TRY_TO_pair_with_others_with_this_tag'] == 1]['name'].tolist())
-
 
     schedule = []
     total_slots = len(duty_days_df) * 3
@@ -185,76 +184,101 @@ def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
         date_parsed = row['date_parsed']
         day_of_week = row['day_of_week']
         week_number = date_parsed.isocalendar()[1]
+        
+        current_month_key = (date_parsed.year, date_parsed.month)
 
-        # 1. Get available staff based on day of week and weekly limit constraint
+        # ---------------------------------------------------------
+        # STEP 1: Strict Filter (Standard Availability + Max 2/Month)
+        # ---------------------------------------------------------
         available_staff = []
         for _, staff_row in staff_df.iterrows():
             name = staff_row['name']
             if staff_row[day_of_week] == 1:
                 if last_duty_week[name] != week_number:
-                    # Also check against target duties to maintain balance early on
                     if duty_count[name] <= target_duties:
+                        if monthly_duty_count.get((name, current_month_key), 0) < 2:
+                            available_staff.append(name)
+
+        # ---------------------------------------------------------
+        # STEP 2: Relax Total Target (Keep Max 2/Month)
+        # ---------------------------------------------------------
+        if len(available_staff) < 3:
+            available_staff = []
+            for _, staff_row in staff_df.iterrows():
+                name = staff_row['name']
+                if staff_row[day_of_week] == 1:
+                    if last_duty_week[name] != week_number:
+                        if monthly_duty_count.get((name, current_month_key), 0) < 2:
+                            available_staff.append(name)
+
+        # ---------------------------------------------------------
+        # STEP 3: Relax Monthly Limit (The Safety Valve)
+        # ---------------------------------------------------------
+        if len(available_staff) < 3:
+            for _, staff_row in staff_df.iterrows():
+                name = staff_row['name']
+                if name not in available_staff:
+                    if staff_row[day_of_week] == 1:
+                        if last_duty_week[name] != week_number:
+                            available_staff.append(name)
+        
+        # ---------------------------------------------------------
+        # STEP 4: Panic Mode
+        # ---------------------------------------------------------
+        if len(available_staff) < 3:
+             for _, staff_row in staff_df.iterrows():
+                name = staff_row['name']
+                if name not in available_staff:
+                    if staff_row[day_of_week] == 1:
                         available_staff.append(name)
 
-        # Relax constraints if needed (if not enough people available)
-        if len(available_staff) < 3:
-            available_staff = [
-                staff_row['name'] for _, staff_row in staff_df.iterrows() 
-                if staff_row[day_of_week] == 1 and duty_count[staff_row['name']] <= target_duties
-            ]
-
-        if len(available_staff) < 3:
-            available_staff = [
-                staff_row['name'] for _, staff_row in staff_df.iterrows() 
-                if staff_row[day_of_week] == 1
-            ]
-
-        # Sort available staff by duty count (for fairness)
+        # Sort available staff by duty count (Fairness is paramount here)
         available_staff.sort(key=lambda x: (duty_count[x], quiet_room_count[x]))
         
+        # Calculate the "Fairness Baseline"
+        # This is the lowest number of duties anyone currently available has.
+        # If the Pro-Pairers have more duties than this baseline, they shouldn't cut the line.
+        min_duties_in_pool = duty_count[available_staff[0]] if available_staff else 0
+
         selected_staff = []
         
-        # --- NEW LOGIC: Multi-pass Selection ---
+        # --- Multi-pass Selection with Fairness Gate ---
 
-        # PASS 1: Try to satisfy the "Pro-Pairing" requirement first.
-        # If there are at least 2 available staff with the pro-pairing tag, prioritize picking them together.
+        # PASS 1: Pro-Pairing (With Fairness Gate)
         available_pro_pairers = [s for s in available_staff if s in staff_with_pro_pairing_tag]
         
         if len(available_pro_pairers) >= 2:
-            # We have enough to make a pair.
-            # Iterate through the sorted pro-pairers and pick the first two that don't violate anti-pairing constraints.
             temp_pro_picks = []
             anti_paired_count_in_temp = 0
 
             for staff in available_pro_pairers:
                 if len(temp_pro_picks) == 2: break
+                
+                # === THE FAIRNESS GATE ===
+                # If this staff member has more duties than the person at the front of the line,
+                # they cannot use their "Pro-Pairing" privilege to cut in.
+                if duty_count[staff] > min_duties_in_pool:
+                    continue
+                # =========================
 
                 is_anti_paired = staff in staff_with_anti_pairing_tag
-                
-                # If picking this person violates the anti-pairing constraint (max 1 per day), skip them for now.
                 if is_anti_paired and anti_paired_count_in_temp >= 1:
                     continue
-
+                
                 temp_pro_picks.append(staff)
                 if is_anti_paired:
                     anti_paired_count_in_temp += 1
             
-            # Only commit to these picks if we successfully got at least 2 to form a "pair"
             if len(temp_pro_picks) >= 2:
                  selected_staff.extend(temp_pro_picks)
 
-        # PASS 2: Fill remaining slots, respecting the "Anti-Pairing" constraint.
-        
-        # Calculate current anti-pairing count based on Pass 1 picks
+        # PASS 2: Fill remaining slots (Standard Logic)
         anti_pairing_count = sum(1 for s in selected_staff if s in staff_with_anti_pairing_tag)
-        max_anti_paired_allowed = 1 # Only allow 1 staff member with the tag per day
+        max_anti_paired_allowed = 1 
         
         for staff in available_staff:
-            if len(selected_staff) >= 3:
-                break
-            
-            if staff in selected_staff:
-                continue # Already picked in Pass 1
+            if len(selected_staff) >= 3: break
+            if staff in selected_staff: continue
 
             if staff in staff_with_anti_pairing_tag:
                 if anti_pairing_count < max_anti_paired_allowed:
@@ -263,21 +287,18 @@ def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
             else:
                 selected_staff.append(staff)
         
-        # If we couldn't fill slots while respecting anti-pairing constraint, relax it as a last resort
+        # Final fallback
         if len(selected_staff) < 3:
             for staff in available_staff:
                 if staff not in selected_staff:
                     selected_staff.append(staff)
-                    if len(selected_staff) >= 3:
-                        break
+                    if len(selected_staff) >= 3: break
         
-        # Fill remaining slots with UNASSIGNED if needed (absolute last resort)
         while len(selected_staff) < 3:
             selected_staff.append('UNASSIGNED')
 
         # Assign rooms
         random.shuffle(selected_staff)
-        # Prioritize those with fewest quiet room duties for the quiet room slot
         selected_staff.sort(key=lambda x: quiet_room_count.get(x, 0) if x != 'UNASSIGNED' else 999)
 
         quiet_room_staff = selected_staff[0]
@@ -288,6 +309,10 @@ def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
             if staff != 'UNASSIGNED':
                 duty_count[staff] += 1
                 last_duty_week[staff] = week_number
+                
+                # Update Monthly Count
+                current_monthly_val = monthly_duty_count.get((staff, current_month_key), 0)
+                monthly_duty_count[(staff, current_month_key)] = current_monthly_val + 1
 
         if quiet_room_staff != 'UNASSIGNED':
             quiet_room_count[quiet_room_staff] += 1
