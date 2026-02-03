@@ -233,6 +233,7 @@ def generate_lunch_duty_schedule(duty_days_df, staff_df, seed=None):
                         available_staff.append(name)
 
         # Sort available staff by duty count (Fairness is paramount here)
+        random.shuffle(available_staff) # <--- Add this
         available_staff.sort(key=lambda x: (duty_count[x], quiet_room_count[x]))
         
         # Calculate the "Fairness Baseline"
