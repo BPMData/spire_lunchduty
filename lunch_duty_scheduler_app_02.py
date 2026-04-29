@@ -1522,7 +1522,7 @@ else:
         ### Algorithm (V2.0):
         - ✅ **Phase 1:** Every person gets the exact mathematical minimum number of duties (some get +1 if slots don't divide evenly).
         - ✅ **Phase 2:** Greedy gap‑maximizing assignment: each day, the 3 people with the longest gaps since their last duty are selected, with randomization to vary day‑of‑week patterns.
-        - ✅ **Phase 3:** Minor post‑processing swaps to accommodate optional pairing/anti‑pairing tags without disrupting fairness.
+        - ✅ **Phase 3:** Minor post‑processing swaps to accommodate any additional constraints tags without disrupting fairness.
 
         ### Schedule Period:
         - **Full Year:** All duty days in the uploaded calendar.
