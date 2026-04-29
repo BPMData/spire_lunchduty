@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lunch Duty Scheduler – How the Algorithm Works</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, system-ui, sans-serif;
+            background: #f9f7f5;
+            color: #333;
+            line-height: 1.6;
+            padding: 2rem 1.5rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container {
+            max-width: 1000px;
+            width: 100%;
+            background: white;
+            border-radius: 28px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
+            padding: 2.5rem 2rem;
+        }
+
+        h1 {
+            font-size: 2.4rem;
+            font-weight: 700;
+            color: #8B0000; /* maroon */
+            text-align: center;
+            margin-bottom: 0.25rem;
+            letter-spacing: -0.5px;
+        }
+
+        .subtitle {
+            text-align: center;
+            font-size: 1.2rem;
+            color: #555;
+            margin-bottom: 2.5rem;
+            font-weight: 500;
+        }
+
+        .phase {
+            background: #fff;
+            border-radius: 20px;
+            padding: 1.8rem 2rem;
+            margin-bottom: 2rem;
+            border-left: 8px solid #8B0000;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.04);
+            transition: transform 0.2s;
+        }
+
+        .phase:nth-child(odd) {
+            border-left-color: #FFB6D9; /* pink accent */
+        }
+
+        .phase h2 {
+            font-size: 1.8rem;
+            color: #8B0000;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .phase h2 .icon {
+            font-size: 2rem;
+        }
+
+        .definition-box {
+            background: #F5F5F5;
+            border-radius: 12px;
+            padding: 1rem 1.4rem;
+            margin: 1rem 0;
+            font-style: italic;
+            border-left: 4px solid #8B0000;
+        }
+
+        .definition-box strong {
+            color: #8B0000;
+        }
+
+        ol, ul {
+            padding-left: 1.8rem;
+            margin: 1rem 0;
+        }
+
+        li {
+            margin-bottom: 0.5rem;
+        }
+
+        .scoring {
+            font-family: 'Courier New', monospace;
+            background: #fefefe;
+            padding: 0.3rem 0.8rem;
+            border-radius: 6px;
+            background: #fff3f8;
+            display: inline-block;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            margin: 1rem 0;
+        }
+
+        @media (max-width: 700px) {
+            .grid-2 {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .step-badge {
+            background: #8B0000;
+            color: white;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            margin-right: 0.6rem;
+        }
+
+        .highlight {
+            background: #FFB6D9;
+            color: #8B0000;
+            padding: 0.2rem 0.6rem;
+            border-radius: 20px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .arrow-down {
+            text-align: center;
+            font-size: 2rem;
+            color: #8B0000;
+            margin: 0.5rem 0 1rem;
+        }
+
+        .footer-note {
+            margin-top: 2rem;
+            background: #F5F5F5;
+            border-radius: 16px;
+            padding: 1.2rem 1.8rem;
+            font-size: 0.95rem;
+            color: #444;
+            border: 1px dashed #ccc;
+        }
+
+        hr {
+            border: 0;
+            height: 1px;
+            background: #eee;
+            margin: 2rem 0;
+        }
+
+        .tag {
+            display: inline-block;
+            background: #eee;
+            padding: 0.1rem 0.7rem;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            margin-right: 0.3rem;
+        }
+
+        .tag.pro {
+            background: #d4edda;
+            color: #155724;
+        }
+        .tag.anti {
+            background: #fff3cd;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🍽️ How the Lunch Duty Scheduler Works</h1>
+        <p class="subtitle">A fair, gap‑maximizing algorithm — explained without jargon</p>
+
+        <!-- Introduction -->
+        <p style="font-size:1.1rem; margin-bottom:1.5rem;">
+            The scheduler assigns <strong>three lunch‑duty slots</strong> (two main rooms + one quiet room) 
+            every Monday, Tuesday, and Wednesday. It must honour each staff member’s availability, spread duties evenly, 
+            and avoid back‑to‑back assignments. After building a perfectly fair plan, it gently adjusts for pairing preferences 
+            (e.g., two teachers who want to work together, or two who should not be on the same day).
+        </p>
+
+        <div class="arrow-down">⬇️</div>
+
+        <!-- ========== PHASE 1 ========== -->
+        <div class="phase">
+            <h2>
+                <span class="icon">📐</span> Phase 1 – Exact Quota Calculation
+            </h2>
+            <p><strong>Goal:</strong> Give every person the absolute minimum number of duties required, while respecting their availability.</p>
+
+            <ol>
+                <li><strong>Count total slots:</strong>  
+                    <span class="highlight">number of duty days × 3</span> (because each day needs 3 staff).</li>
+                <li><strong>Equal division:</strong> Divide slots by the number of staff. 
+                    Most people get <code>base</code> duties; a few randomly chosen people get one extra to cover the remainder.</li>
+                <li><strong>Availability check:</strong> For each person, count how many duty days they can actually work (based on their Monday/Tuesday/Wednesday availability). 
+                    If someone’s quota exceeds that maximum, it is <strong>reduced</strong> to a feasible value.</li>
+                <li><strong>Redistribute excess:</strong> Any leftover slots are given to staff who still have capacity, keeping the distribution as equal as possible.</li>
+                <li><strong>Warnings:</strong> If there simply aren’t enough available staff to fill all slots, a warning is raised — but the algorithm still tries its best.</li>
+            </ol>
+            <div class="definition-box">
+                <strong>💡 Why “quota”?</strong> The system first decides <em>how many</em> duties each person will do before placing them on specific days. 
+                This guarantees that the final schedule is fair — nobody is asked to work more than their fair share.
+            </div>
+        </div>
+
+        <div class="arrow-down">⬇️</div>
+
+        <!-- ========== PHASE 2 ========== -->
+        <div class="phase">
+            <h2>
+                <span class="icon">⚙️</span> Phase 2 – Gap‑Maximising Schedule (Greedy Algorithm)
+            </h2>
+            <p><strong>Goal:</strong> Place the duties on the actual calendar so that each person’s shifts are spread as far apart as possible, weekday patterns stay varied, and nobody misses their quota.</p>
+
+            <div class="definition-box">
+                <strong>📖 What is a “greedy” algorithm?</strong>  
+                It makes the best choice <em>right now</em>, without looking ahead. Imagine picking teammates one by one: each time you choose the person who seems most urgent. That’s greedy. It’s fast, simple, and works well for scheduling when combined with smart scoring.
+            </div>
+
+            <p>The scheduler processes every duty day in chronological order (from the first Monday to the last Wednesday). For each day it follows these steps:</p>
+
+            <div class="grid-2">
+                <div>
+                    <p><span class="step-badge">1</span> <strong>Build an eligible list</strong><br>
+                    Staff must be available that weekday, still have quota left, and (preferably) not already working in the same calendar week. If not enough eligible staff remain, the “same‑week” rule is relaxed, and in extreme cases the quota is relaxed.</p>
+                </div>
+                <div>
+                    <p><span class="step-badge">2</span> <strong>Score each candidate</strong><br>
+                    A formula decides who most “needs” a duty today. It values three things:</p>
+                    <ul>
+                        <li><span class="highlight">Urgency:</span> how many of their remaining duties must still be fitted in.</li>
+                        <li><span class="highlight">Gap since last duty:</span> the longer they’ve waited, the higher the score.</li>
+                        <li><span class="highlight">Weekday balance:</span> avoid always giving the same person Mondays.</li>
+                    </ul>
+                    <p>A tiny random jitter is added to break ties. <br>
+                    <span class="scoring">score = 5.0×urgency + 0.55×gap_score + 0.30×balance + 0.15×random</span></p>
+                </div>
+            </div>
+
+            <p><span class="step-badge">3</span> <strong>Pick the top 3</strong> – the three highest‑scoring eligible staff are chosen for that day. If fewer than three are available, remaining slots are marked “UNASSIGNED”.</p>
+
+            <p><span class="step-badge">4</span> <strong>Assign rooms fairly</strong> – the person who has worked the fewest quiet‑room duties so far gets the quiet room. The other two are randomly placed in the two main rooms. This keeps the quiet‑room load balanced over time.</p>
+
+            <p><span class="step-badge">5</span> <strong>Update memory:</strong> The scheduler tracks each person’s last duty date, weekday counts, and weekly assignments so that the next day’s scores are accurate.</p>
+
+            <div class="definition-box">
+                <strong>🎯 Why this works:</strong> By always picking people with the longest gaps and highest urgency, duties are naturally spaced out. The weekday‑balance factor makes sure nobody is stuck with every Monday. Over the whole period, everyone ends up with exactly their quota.
+            </div>
+        </div>
+
+        <div class="arrow-down">⬇️</div>
+
+        <!-- ========== PHASE 3 ========== -->
+        <div class="phase">
+            <h2>
+                <span class="icon">🔀</span> Phase 3 – Optional Pairing Swaps (Post‑Processing)
+            </h2>
+            <p><strong>Goal:</strong> After the perfectly fair schedule is built, gently adjust it to honour two kinds of tags — <span class="tag pro">should try to pair</span> and <span class="tag anti">should not be paired</span> — without breaking fairness or availability.</p>
+
+            <div class="grid-2">
+                <div>
+                    <h3 style="color:#8B0000; margin-bottom:0.5rem;">🤝 Pro‑Pairing (try to work together)</h3>
+                    <p>If two staff members have the “try to pair” tag, the algorithm looks for days where only one of them is on duty. It tries to swap another staff member from a nearby day (within ±14 days) with the tagged person’s partner — but only if:</p>
+                    <ul>
+                        <li>Neither violates their quota.</li>
+                        <li>Neither ends up working twice in the same week.</li>
+                        <li>Both are available on the swapped day.</li>
+                        <li>The swap doesn’t create an anti‑pairing conflict.</li>
+                    </ul>
+                </div>
+                <div>
+                    <h3 style="color:#8B0000; margin-bottom:0.5rem;">🚫 Anti‑Pairing (avoid working together)</h3>
+                    <p>If two staff with the “avoid” tag end up on the same day, the algorithm tries to trade one of them with a non‑tagged staff member from a nearby day. Again, the same strict rules apply — no quota changes, no week‑double‑booking, no availability violations.</p>
+                </div>
+            </div>
+            <p style="margin-top:1rem;">These swaps are <strong>minor</strong> and only attempt to improve pairing preferences. They never increase anyone’s duty count or break the fairness built in Phase 2.</p>
+            <div class="definition-box">
+                <strong>⚖️ Fairness first:</strong> The swaps are a “best effort” after the main schedule is complete. If a swap would make the schedule unfair or impossible, it is simply skipped. The core promise — everyone does exactly their mathematical share — is always kept.
+            </div>
+        </div>
+
+        <hr>
+
+        <!-- Recap -->
+        <div style="display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; justify-content: center; margin: 1.5rem 0;">
+            <div style="background:#8B0000; color:white; padding:1rem 1.8rem; border-radius: 40px; font-weight:700; font-size:1.2rem;">
+                🎯 Fair quotas
+            </div>
+            <span style="font-size:2rem; color:#8B0000;">→</span>
+            <div style="background:#FFB6D9; color:#8B0000; padding:1rem 1.8rem; border-radius: 40px; font-weight:700; font-size:1.2rem;">
+                📅 Greedy gap‑maximising placement
+            </div>
+            <span style="font-size:2rem; color:#8B0000;">→</span>
+            <div style="background:#8B0000; color:white; padding:1rem 1.8rem; border-radius: 40px; font-weight:700; font-size:1.2rem;">
+                🤲 Gentle pairing swaps
+            </div>
+        </div>
+
+        <div class="footer-note">
+            <strong>🧠 In a nutshell:</strong> The scheduler first decides <em>how many</em> duties each person must do (Phase 1). 
+            Then it places those duties on the calendar, day by day, always choosing the people who have waited the longest and need the most shifts (Phase 2). 
+            Finally, it makes small swaps to honour “try to pair” and “avoid pairing” tags, without upsetting the fair distribution (Phase 3). 
+            The result is a lunch duty schedule that is mathematically fair, respects availability, and spreads duties as evenly as possible across the term.
+        </div>
+    </div>
+</body>
+</html>
