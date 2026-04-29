@@ -14,7 +14,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from PIL import Image, ImageDraw, ImageFont
 
-st.set_page_config(page_title="Lunch Duty Scheduler Deepseek v3 Gemini", page_icon="🍽️", layout="wide")
+st.set_page_config(page_title="Lunch Duty Scheduler v2", page_icon="🍽️", layout="wide")
 
 
 # ==================== CONSTANTS ====================
