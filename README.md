@@ -16,7 +16,7 @@ Automated lunch duty scheduling app for The Spire School 2025-2026 academic year
 ### Local Development
 ```bash
 pip install -r requirements.txt
-streamlit run lunch_duty_scheduler_app.py
+streamlit run lunch_duty_scheduler_app_02.py
 ```
 
 ### Deploy to Streamlit Cloud
@@ -24,6 +24,17 @@ streamlit run lunch_duty_scheduler_app.py
 2. Go to [share.streamlit.io](https://share.streamlit.io)
 3. Connect your GitHub repo
 4. Deploy!
+
+## CSV to PDF (companion app)
+
+If you edit the CSV this app exports by hand, `csv_to_pdf/` turns it into a printable PDF:
+
+```bash
+pip install -r csv_to_pdf/requirements.txt
+streamlit run csv_to_pdf/csv_to_pdf_app.py
+```
+
+(This used to be its own repo, `spire_lunch_duty_CSVtoPDF`, now archived.)
 
 ## Required Files
 
